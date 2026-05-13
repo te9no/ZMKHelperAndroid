@@ -144,7 +144,7 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.TOP);
         int pad = dp(16);
-        root.setPadding(pad, dp(8), pad, pad);
+        root.setPadding(pad, dp(40), pad, pad);
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
@@ -155,7 +155,7 @@ public final class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(0, 0, 0, dp(8));
+        header.setPadding(0, 0, 0, dp(14));
         header.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -167,10 +167,10 @@ public final class MainActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText("ZMK Firmware Helper");
-        title.setTextSize(24);
+        title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(0xFF14213D);
-        title.setPadding(dp(12), 0, 0, dp(12));
+        title.setPadding(dp(12), 0, 0, 0);
         header.addView(title);
 
         LinearLayout repoCard = card();
@@ -502,7 +502,7 @@ public final class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextColor(0xFFFFFFFF);
         button.setBackground(rounded(0xFF2457A6, 0xFF2457A6, dp(14)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(96), dp(44));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(112), dp(52));
         params.setMargins(0, 0, 0, 0);
         button.setLayoutParams(params);
         return button;
