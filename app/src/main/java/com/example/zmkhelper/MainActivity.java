@@ -109,6 +109,8 @@ public final class MainActivity extends Activity {
     private boolean pendingBleWrite;
     private boolean scanningBle;
     private boolean selectedBleDeviceFresh;
+    private boolean bleDfuProcessStarted;
+    private int bleDfuProgressPercent;
     private int bootloaderPollAttempts;
     private float touchStartX;
     private float touchStartY;
@@ -124,6 +126,7 @@ public final class MainActivity extends Activity {
         @Override
         public void onDfuProcessStarting(String deviceAddress) {
             runOnUiThread(() -> {
+                bleDfuProcessStarted = true;
                 setBusy(true);
                 setStatus("BLE OTA: starting DFU...");
             });
@@ -133,6 +136,7 @@ public final class MainActivity extends Activity {
         public void onProgressChanged(String deviceAddress, int percent, float speed, float avgSpeed,
                 int currentPart, int partsTotal) {
             runOnUiThread(() -> {
+                bleDfuProgressPercent = Math.max(bleDfuProgressPercent, percent);
                 setProgressPercent(percent);
                 setStatus("BLE OTA: writing " + percent + "% (" + currentPart + "/" + partsTotal + ")");
             });
@@ -143,6 +147,10 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 setBusy(false);
                 setProgressPercent(100);
+                bleDfuProcessStarted = false;
+                bleDfuProgressPercent = 0;
+                selectedBleDeviceFresh = false;
+                updateBleSummary();
                 setStatus("BLE OTA complete. The keyboard should reboot into the updated firmware.");
             });
         }
@@ -151,6 +159,7 @@ public final class MainActivity extends Activity {
         public void onDfuAborted(String deviceAddress) {
             runOnUiThread(() -> {
                 setBusy(false);
+                bleDfuProcessStarted = false;
                 setStatus("BLE OTA aborted.");
             });
         }
@@ -159,7 +168,9 @@ public final class MainActivity extends Activity {
         public void onError(String deviceAddress, int error, int errorType, String message) {
             runOnUiThread(() -> {
                 setBusy(false);
-                selectedBleDeviceFresh = false;
+                boolean canRetrySameDevice = bleDfuProcessStarted || bleDfuProgressPercent > 0;
+                selectedBleDeviceFresh = canRetrySameDevice;
+                bleDfuProcessStarted = false;
                 updateBleSummary();
                 setStatus("BLE OTA error: " + message + " (" + error + ")"
                         + "\n" + explainBleDfuError(error, message));
@@ -1288,15 +1299,19 @@ public final class MainActivity extends Activity {
         stopBleScan();
         setBusy(true);
         setProgressPercent(0);
+        bleDfuProcessStarted = false;
+        bleDfuProgressPercent = 0;
         setStatus("Starting BLE OTA for " + selectedBleDevice.name + "...");
         DfuServiceInitiator.createDfuNotificationChannel(this);
         DfuServiceInitiator initiator = new DfuServiceInitiator(selectedBleDevice.address)
                 .setDeviceName(selectedBleDevice.name)
+                .setForeground(true)
                 .setKeepBond(false)
                 .setRestoreBond(false)
-                .setNumberOfRetries(2)
-                .setPacketsReceiptNotificationsEnabled(true)
-                .setPacketsReceiptNotificationsValue(12)
+                .setNumberOfRetries(5)
+                .setMtu(517)
+                .setPacketsReceiptNotificationsEnabled(false)
+                .setPacketsReceiptNotificationsValue(0)
                 .setUnsafeExperimentalButtonlessServiceInSecureDfuEnabled(true)
                 .setZip(selectedFirmware.file.getAbsolutePath());
         initiator.start(this, DfuUpdateService.class);
@@ -1304,6 +1319,10 @@ public final class MainActivity extends Activity {
 
     private String explainBleDfuError(int error, String message) {
         String lower = message == null ? "" : message.toLowerCase(java.util.Locale.US);
+        if (bleDfuProgressPercent > 0) {
+            return "Transfer reached " + bleDfuProgressPercent
+                    + "%. Keep the keyboard in DFU mode and tap Write selected ZIP over BLE OTA again to resume/retry.";
+        }
         if (error == 147 || lower.contains("timeout")) {
             return "Connection timed out. Keep the keyboard in BLE DFU mode, move it close to the phone, then scan and select the current DFU advertisement again.";
         }
