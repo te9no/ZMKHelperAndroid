@@ -38,3 +38,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    implementation("no.nordicsemi.android:dfu:2.9.0")
+}

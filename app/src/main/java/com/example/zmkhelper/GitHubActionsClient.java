@@ -188,12 +188,13 @@ public final class GitHubActionsClient {
         if (lower.contains("uf2")) return ".uf2";
         if (lower.contains("bin")) return ".bin";
         if (lower.contains("hex")) return ".hex";
+        if (lower.contains("zip")) return ".zip";
         return "";
     }
 
     private static boolean isFirmwareName(String name) {
         String lower = name.toLowerCase(Locale.US);
-        return lower.endsWith(".uf2") || lower.endsWith(".bin") || lower.endsWith(".hex");
+        return lower.endsWith(".uf2") || lower.endsWith(".bin") || lower.endsWith(".hex") || lower.endsWith(".zip");
     }
 
     private static String encodePath(String value) {

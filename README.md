@@ -13,10 +13,12 @@ Android app for updating ZMK keyboard firmware from GitHub Actions artifacts.
 - Load successful GitHub Actions workflow runs, optionally filtered by branch.
 - Show available, non-expired workflow artifacts ordered by GitHub's run response.
 - Select the latest artifact by default, or choose a specific branch/commit timestamp from the list.
-- Download the selected artifact ZIP and list every `.uf2`, `.bin`, or `.hex` file inside it.
+- Download the selected artifact ZIP and list every `.uf2`, `.bin`, `.hex`, or BLE OTA `.zip` file inside it.
 - Cache artifact ZIPs and extracted firmware files by GitHub artifact ID. Re-selecting the same artifact reuses extracted files first, then the cached ZIP, and only downloads again if neither cache exists.
 - Cache the Build artifact list by repository and branch so the app can show the previous build list immediately on startup or before a GitHub refresh completes.
 - Select the exact firmware file to write, such as the left/right UF2 from a split ZMK build.
+- Select a Nordic/Adafruit DFU `*.zip` package and write it over BLE OTA.
+- Scan for BLE OTA devices from the app, select the target half, and keep the selected BLE device address for the next update.
 - Register the ZMK bootloader volume through Android's Storage Access Framework.
 - Arm write mode, snapshot currently connected removable volumes, then treat a newly mounted removable drive as the bootloader drive.
 - Prefer newly mounted removable volumes whose names look like bootloaders, including `XIAO`, `BOOT`, `UF2`, `RP2040`, `nRF52`, or `nice!nano`.
@@ -33,6 +35,21 @@ Android app for updating ZMK keyboard firmware from GitHub Actions artifacts.
 Android apps cannot reliably write directly to arbitrary mounted USB mass-storage paths. This app therefore stores a persistable Storage Access Framework URI for the bootloader volume. The user must choose the bootloader folder once after the keyboard is in bootloader mode. After that, write mode can use the saved URI.
 
 Write mode detects bootloader insertion by comparing removable storage volumes before and after write mode is armed. A newly mounted removable volume with a bootloader-like name is treated as the bootloader drive candidate. Direct automatic writing to a never-authorized drive is not possible on Android, so first use may still require folder selection.
+
+## BLE OTA updates
+
+BLE OTA is intended for keyboard firmware packages generated as Nordic/Adafruit DFU ZIP files, for example `keyboard_left-ble-ota.zip`.
+
+1. Load the GitHub Actions build artifact.
+2. Tap `Select Firmware` and choose the DFU `.zip` file for the target keyboard or half.
+3. Put the target keyboard or half into BLE DFU mode.
+4. Tap `Scan BLE OTA devices`.
+5. Select the advertising DFU device.
+6. Tap `Write selected ZIP over BLE OTA`.
+
+USB mass-storage writing still uses `.uf2` files. BLE OTA requires a `.zip` DFU package; selecting a `.uf2`, `.bin`, or `.hex` for BLE OTA is rejected.
+
+The app uses Nordic's Android DFU library, which supports nRF51/nRF52 devices with compatible nRF5 SDK Secure or Legacy DFU bootloaders, including Adafruit-style BLE DFU packages. It is not a generic BLE file-transfer protocol; each keyboard firmware must provide a compatible DFU ZIP.
 
 ## GitHub login setup
 

@@ -1,7 +1,14 @@
 package com.example.zmkhelper;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Dialog;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanResult;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -9,10 +16,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -41,17 +50,25 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import no.nordicsemi.android.dfu.DfuProgressListener;
+import no.nordicsemi.android.dfu.DfuProgressListenerAdapter;
+import no.nordicsemi.android.dfu.DfuServiceInitiator;
+import no.nordicsemi.android.dfu.DfuServiceListenerHelper;
+
 public final class MainActivity extends Activity {
     private static final int REQ_BOOTLOADER_FOLDER = 41;
+    private static final int REQ_BLE_PERMISSIONS = 42;
     private static final String GITHUB_OAUTH_CLIENT_ID = "Ov23li28WjgBpOYKKb9Y";
 
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService writeExecutor = Executors.newSingleThreadExecutor();
     private final GitHubActionsClient github = new GitHubActionsClient();
     private final GitHubOAuthClient oauth = new GitHubOAuthClient();
     private final FirmwareWriter writer = new FirmwareWriter();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<FirmwareBuild> builds = new ArrayList<>();
     private final List<FirmwareFile> firmwareFiles = new ArrayList<>();
+    private final List<BleDeviceItem> bleDevices = new ArrayList<>();
 
     private SharedPreferences prefs;
     private EditText repoInput;
@@ -59,6 +76,7 @@ public final class MainActivity extends Activity {
     private EditText branchInput;
     private TextView artifactSummary;
     private TextView firmwareSummary;
+    private TextView bleSummary;
     private TextView selectedInfo;
     private TextView status;
     private ProgressBar progress;
@@ -66,14 +84,69 @@ public final class MainActivity extends Activity {
     private View menuScrim;
     private ArrayAdapter<FirmwareBuild> buildAdapter;
     private ArrayAdapter<FirmwareFile> firmwareAdapter;
+    private ArrayAdapter<BleDeviceItem> bleAdapter;
     private FirmwareBuild selectedBuild;
     private FirmwareFile selectedFirmware;
+    private BleDeviceItem selectedBleDevice;
     private boolean writeMode;
     private boolean pendingWriteAfterFolderPick;
+    private boolean pendingBleScan;
+    private boolean pendingBleWrite;
+    private boolean scanningBle;
     private int bootloaderPollAttempts;
     private float touchStartX;
     private float touchStartY;
+    private ScanCallback scanCallback;
     private final Set<String> writeModeVolumeKeys = new HashSet<>();
+
+    private final DfuProgressListener dfuProgressListener = new DfuProgressListenerAdapter() {
+        @Override
+        public void onDeviceConnecting(String deviceAddress) {
+            runOnUiThread(() -> setStatus("BLE OTA: connecting to " + deviceAddress + "..."));
+        }
+
+        @Override
+        public void onDfuProcessStarting(String deviceAddress) {
+            runOnUiThread(() -> {
+                setBusy(true);
+                setStatus("BLE OTA: starting DFU...");
+            });
+        }
+
+        @Override
+        public void onProgressChanged(String deviceAddress, int percent, float speed, float avgSpeed,
+                int currentPart, int partsTotal) {
+            runOnUiThread(() -> {
+                setProgressPercent(percent);
+                setStatus("BLE OTA: writing " + percent + "% (" + currentPart + "/" + partsTotal + ")");
+            });
+        }
+
+        @Override
+        public void onDfuCompleted(String deviceAddress) {
+            runOnUiThread(() -> {
+                setBusy(false);
+                setProgressPercent(100);
+                setStatus("BLE OTA complete. The keyboard should reboot into the updated firmware.");
+            });
+        }
+
+        @Override
+        public void onDfuAborted(String deviceAddress) {
+            runOnUiThread(() -> {
+                setBusy(false);
+                setStatus("BLE OTA aborted.");
+            });
+        }
+
+        @Override
+        public void onError(String deviceAddress, int error, int errorType, String message) {
+            runOnUiThread(() -> {
+                setBusy(false);
+                setStatus("BLE OTA error: " + message + " (" + error + ")");
+            });
+        }
+    };
 
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         @Override
@@ -103,6 +176,7 @@ public final class MainActivity extends Activity {
         IntentFilter mediaFilter = new IntentFilter(Intent.ACTION_MEDIA_MOUNTED);
         mediaFilter.addDataScheme("file");
         registerReceiver(mediaReceiver, mediaFilter);
+        DfuServiceListenerHelper.registerProgressListener(this, dfuProgressListener);
     }
 
     @Override
@@ -115,8 +189,40 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         unregisterReceiver(usbReceiver);
         unregisterReceiver(mediaReceiver);
-        executor.shutdownNow();
+        stopBleScan();
+        DfuServiceListenerHelper.unregisterProgressListener(this, dfuProgressListener);
+        networkExecutor.shutdownNow();
+        writeExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_BLE_PERMISSIONS) {
+            return;
+        }
+        if (grantResults.length == 0) {
+            pendingBleScan = false;
+            pendingBleWrite = false;
+            setStatus("Bluetooth permission is required for BLE OTA updates.");
+            return;
+        }
+        for (int result : grantResults) {
+            if (result != PackageManager.PERMISSION_GRANTED) {
+                pendingBleScan = false;
+                pendingBleWrite = false;
+                setStatus("Bluetooth permission is required for BLE OTA updates.");
+                return;
+            }
+        }
+        if (pendingBleScan) {
+            pendingBleScan = false;
+            startBleScan();
+        } else if (pendingBleWrite) {
+            pendingBleWrite = false;
+            startBleDfu();
+        }
     }
 
     @Override
@@ -217,6 +323,25 @@ public final class MainActivity extends Activity {
         selectFirmware.setOnClickListener(v -> showFirmwareSelector());
         firmwareCard.addView(selectFirmware);
         root.addView(firmwareCard);
+
+        LinearLayout bleCard = card();
+        TextView bleLabel = new TextView(this);
+        bleLabel.setText("BLE OTA update");
+        styleSectionLabel(bleLabel);
+        bleCard.addView(bleLabel);
+
+        bleAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, bleDevices);
+        bleSummary = summaryText("No BLE DFU device selected");
+        bleCard.addView(bleSummary);
+
+        Button scanBle = button("Scan BLE OTA devices");
+        scanBle.setOnClickListener(v -> showBleDeviceSelector());
+        bleCard.addView(scanBle);
+
+        Button writeBle = button("Write selected ZIP over BLE OTA");
+        writeBle.setOnClickListener(v -> startBleDfu());
+        bleCard.addView(writeBle);
+        root.addView(bleCard);
 
         LinearLayout writeCard = card();
 
@@ -379,6 +504,65 @@ public final class MainActivity extends Activity {
         });
         dialog.show();
         dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+    }
+
+    private void showBleDeviceSelector() {
+        if (!ensureBlePermissions(true)) {
+            return;
+        }
+        Dialog dialog = new Dialog(this);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(18), dp(16), dp(16));
+        panel.setBackgroundColor(0xFFF4F7FB);
+
+        TextView title = new TextView(this);
+        title.setText("Select BLE OTA Device");
+        title.setTextSize(22);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(0xFF14213D);
+        title.setPadding(0, 0, 0, dp(10));
+        panel.addView(title);
+
+        ListView list = new ListView(this);
+        list.setAdapter(bleAdapter);
+        list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+        list.setDividerHeight(dp(1));
+        list.setBackground(rounded(0xFFFFFFFF, 0xFFE4EAF2, dp(18)));
+        list.setOnItemClickListener((parent, view, position, id) -> {
+            selectedBleDevice = bleDevices.get(position);
+            prefs.edit()
+                    .putString("selectedBleName", selectedBleDevice.name)
+                    .putString("selectedBleAddress", selectedBleDevice.address)
+                    .apply();
+            updateBleSummary();
+            stopBleScan();
+            setStatus("Selected BLE OTA device: " + selectedBleDevice);
+            dialog.dismiss();
+        });
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f);
+        listParams.setMargins(0, 0, 0, dp(12));
+        panel.addView(list, listParams);
+
+        Button rescan = button("Rescan");
+        rescan.setOnClickListener(v -> startBleScan());
+        panel.addView(rescan);
+
+        Button close = button("Cancel");
+        close.setOnClickListener(v -> {
+            stopBleScan();
+            dialog.dismiss();
+        });
+        panel.addView(close);
+
+        dialog.setOnDismissListener(v -> stopBleScan());
+        dialog.setContentView(panel);
+        dialog.show();
+        dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        startBleScan();
     }
 
     private <T> Dialog fullScreenListDialog(String titleText, List<T> items, ListSelection selection) {
@@ -556,7 +740,15 @@ public final class MainActivity extends Activity {
         repoInput.setText(prefs.getString("repo", ""));
         tokenInput.setText(prefs.getString("token", ""));
         branchInput.setText(prefs.getString("branch", ""));
+        String bleAddress = prefs.getString("selectedBleAddress", "");
+        if (!bleAddress.isEmpty()) {
+            selectedBleDevice = new BleDeviceItem(
+                    prefs.getString("selectedBleName", "BLE OTA device"),
+                    bleAddress,
+                    0);
+        }
         restoreSelectedInfoDisplay();
+        updateBleSummary();
         loadCachedBuildsIntoUi();
     }
 
@@ -573,7 +765,7 @@ public final class MainActivity extends Activity {
     private void loginWithGitHub() {
         savePrefs();
         setBusy(true);
-        executor.submit(() -> {
+        networkExecutor.submit(() -> {
             try {
                 String network = NetworkDiagnostics.requireInternet(this);
                 runOnUiThread(() -> setStatus("Requesting GitHub login code...\nNetwork: " + network));
@@ -616,7 +808,7 @@ public final class MainActivity extends Activity {
     private void runNetworkDiagnostic() {
         setBusy(true);
         setStatus("Running GitHub network diagnostic...");
-        executor.submit(() -> {
+        networkExecutor.submit(() -> {
             String result = GitHubNetworkDiagnostic.run(this);
             runOnUiThread(() -> {
                 setBusy(false);
@@ -630,7 +822,7 @@ public final class MainActivity extends Activity {
         loadCachedBuildsIntoUi();
         setBusy(true);
         setStatus("Loading GitHub Actions runs..." + authStatus());
-        executor.submit(() -> {
+        networkExecutor.submit(() -> {
             try {
                 NetworkDiagnostics.requireInternet(this);
                 RepoConfig config = RepoConfig.parse(repoInput.getText().toString(), tokenInput.getText().toString());
@@ -694,7 +886,7 @@ public final class MainActivity extends Activity {
         setBusy(true);
         FirmwareBuild build = selectedBuild;
         setStatus("Downloading artifact firmware list..." + authStatus());
-        executor.submit(() -> {
+        networkExecutor.submit(() -> {
             try {
                 NetworkDiagnostics.requireInternet(this);
                 RepoConfig config = RepoConfig.parse(repoInput.getText().toString(), tokenInput.getText().toString());
@@ -726,6 +918,158 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, REQ_BOOTLOADER_FOLDER);
     }
 
+    private boolean ensureBlePermissions(boolean forScan) {
+        List<String> missing = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 31) {
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.BLUETOOTH_CONNECT);
+            }
+            if (forScan && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.BLUETOOTH_SCAN);
+            }
+        } else if (Build.VERSION.SDK_INT >= 23 && forScan
+                && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (missing.isEmpty()) {
+            return true;
+        }
+        pendingBleScan = forScan;
+        pendingBleWrite = !forScan;
+        requestPermissions(missing.toArray(new String[0]), REQ_BLE_PERMISSIONS);
+        return false;
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private void startBleScan() {
+        if (!ensureBlePermissions(true)) {
+            return;
+        }
+        BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+        if (adapter == null) {
+            setStatus("BLE is not available on this device.");
+            return;
+        }
+        if (!adapter.isEnabled()) {
+            setStatus("Bluetooth is disabled. Enable Bluetooth, then scan again.");
+            startActivity(new Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS));
+            return;
+        }
+        BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
+        if (scanner == null) {
+            setStatus("BLE scanner is not available yet. Try again after Bluetooth is ready.");
+            return;
+        }
+        stopBleScan();
+        bleDevices.clear();
+        if (bleAdapter != null) {
+            bleAdapter.notifyDataSetChanged();
+        }
+        scanningBle = true;
+        setStatus("Scanning for BLE OTA devices. Put the target keyboard into BLE DFU mode.");
+        scanCallback = new ScanCallback() {
+            @Override
+            public void onScanResult(int callbackType, ScanResult result) {
+                addOrUpdateBleDevice(result);
+            }
+
+            @Override
+            public void onBatchScanResults(List<ScanResult> results) {
+                for (ScanResult result : results) {
+                    addOrUpdateBleDevice(result);
+                }
+            }
+
+            @Override
+            public void onScanFailed(int errorCode) {
+                scanningBle = false;
+                setStatus("BLE scan failed: " + errorCode);
+            }
+        };
+        scanner.startScan(scanCallback);
+        mainHandler.postDelayed(() -> {
+            if (scanningBle) {
+                stopBleScan();
+                setStatus("BLE scan finished. Select a device from the list, or rescan.");
+            }
+        }, 15000);
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private void stopBleScan() {
+        if (!scanningBle || scanCallback == null) {
+            return;
+        }
+        BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+        BluetoothLeScanner scanner = adapter == null ? null : adapter.getBluetoothLeScanner();
+        if (scanner != null) {
+            scanner.stopScan(scanCallback);
+        }
+        scanningBle = false;
+        scanCallback = null;
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private void addOrUpdateBleDevice(ScanResult result) {
+        BluetoothDevice device = result.getDevice();
+        if (device == null) {
+            return;
+        }
+        String address = device.getAddress();
+        String name = device.getName();
+        if ((name == null || name.isEmpty()) && result.getScanRecord() != null) {
+            name = result.getScanRecord().getDeviceName();
+        }
+        if (name == null || name.isEmpty()) {
+            name = "Unknown BLE device";
+        }
+        for (int i = 0; i < bleDevices.size(); i++) {
+            if (bleDevices.get(i).address.equals(address)) {
+                bleDevices.set(i, new BleDeviceItem(name, address, result.getRssi()));
+                bleAdapter.notifyDataSetChanged();
+                return;
+            }
+        }
+        bleDevices.add(new BleDeviceItem(name, address, result.getRssi()));
+        bleAdapter.notifyDataSetChanged();
+    }
+
+    private void startBleDfu() {
+        if (!ensureFirmwareSelected()) {
+            return;
+        }
+        if (selectedFirmware == null || !selectedFirmware.name.toLowerCase(java.util.Locale.US).endsWith(".zip")) {
+            toast("Select a BLE OTA ZIP firmware file first");
+            setStatus("BLE OTA requires a Nordic/Adafruit DFU ZIP generated for the target keyboard.");
+            return;
+        }
+        if (selectedBleDevice == null) {
+            toast("Select a BLE OTA device first");
+            showBleDeviceSelector();
+            return;
+        }
+        if (!ensureBlePermissions(false)) {
+            return;
+        }
+        stopBleScan();
+        setBusy(true);
+        setProgressPercent(0);
+        setStatus("Starting BLE OTA for " + selectedBleDevice.name + "...");
+        DfuServiceInitiator.createDfuNotificationChannel(this);
+        DfuServiceInitiator initiator = new DfuServiceInitiator(selectedBleDevice.address)
+                .setDeviceName(selectedBleDevice.name)
+                .setKeepBond(false)
+                .setRestoreBond(false)
+                .setNumberOfRetries(2)
+                .setPacketsReceiptNotificationsEnabled(true)
+                .setPacketsReceiptNotificationsValue(12)
+                .setUnsafeExperimentalButtonlessServiceInSecureDfuEnabled(true)
+                .setZip(selectedFirmware.file.getAbsolutePath());
+        initiator.start(this, DfuUpdateService.class);
+    }
+
     private void startWriteMode() {
         if (!ensureFirmwareSelected()) return;
         writeModeVolumeKeys.clear();
@@ -740,10 +1084,11 @@ public final class MainActivity extends Activity {
         if (!ensureReady()) return;
         writeMode = false;
         bootloaderPollAttempts = 0;
+        setBusy(true);
         setProgressPercent(0);
         setStatus("Preparing selected firmware...");
         FirmwareFile firmware = selectedFirmware;
-        executor.submit(() -> {
+        writeExecutor.submit(() -> {
             try {
                 Uri folder = Uri.parse(prefs.getString("bootloaderUri", ""));
                 runOnUiThread(() -> setStatus("Writing " + firmware.name + " to bootloader volume..."));
@@ -897,6 +1242,19 @@ public final class MainActivity extends Activity {
                 + "\nBranch/commit: " + selectedBuild.branch + " @ " + shortSha
                 + "\nBuild time: " + selectedBuild.createdAt);
         updatePickerSummaries();
+    }
+
+    private void updateBleSummary() {
+        if (bleSummary == null) {
+            return;
+        }
+        if (selectedBleDevice == null) {
+            bleSummary.setText("No BLE DFU device selected");
+        } else {
+            bleSummary.setText(selectedBleDevice.name
+                    + "\n" + selectedBleDevice.address
+                    + "\nUse a .zip firmware generated for BLE OTA.");
+        }
     }
 
     private void updatePickerSummaries() {
@@ -1099,5 +1457,23 @@ public final class MainActivity extends Activity {
 
     private int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private static final class BleDeviceItem {
+        final String name;
+        final String address;
+        final int rssi;
+
+        BleDeviceItem(String name, String address, int rssi) {
+            this.name = name;
+            this.address = address;
+            this.rssi = rssi;
+        }
+
+        @Override
+        public String toString() {
+            String signal = rssi == 0 ? "" : "\nRSSI: " + rssi + " dBm";
+            return name + "\n" + address + signal;
+        }
     }
 }
