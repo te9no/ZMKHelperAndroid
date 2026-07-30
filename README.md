@@ -1,120 +1,237 @@
 # ZMK Helper Android
 
-Android app for updating ZMK keyboard firmware from GitHub Actions artifacts.
+Android 端末から ZMK キーボードのファームウェアを更新するためのアプリです。
 
-## Current behavior
+GitHub Actions の成果物を読み込み、生成された `.uf2` / `.bin` / `.hex` / BLE OTA 用 `.zip` を選択して、USB ブートローダーまたは BLE OTA で書き込みます。
 
-- Register a GitHub repository as `owner/repo` or a `github.com` URL.
-- Login with GitHub OAuth Device Flow, or paste a token manually, to support private repositories and higher API rate limits.
-- Keep GitHub login, token clearing, network diagnostics, and browser shortcuts in the left side menu so the main screen stays focused on firmware selection and writing.
-- Open the side menu by swiping in from the left edge or tapping `Menu`.
-- Keep the GitHub token field in the side menu instead of the main workflow.
-- Use `Select Artifact` and `Select Firmware` buttons that open full-screen selection lists instead of cramped embedded lists.
-- Load successful GitHub Actions workflow runs, optionally filtered by branch.
-- Select a branch from the repository branch list instead of typing the branch name manually.
-- Show available, non-expired workflow artifacts ordered by GitHub's run response.
-- Group artifact choices by GitHub Actions run/build so multiple artifacts from the same build stay together.
-- Select the latest artifact by default, or choose a specific branch/commit timestamp from the list.
-- Download the selected artifact ZIP and list every `.uf2`, `.bin`, `.hex`, or BLE OTA `.zip` file inside it.
-- Cache artifact ZIPs and extracted firmware files by GitHub artifact ID. Re-selecting the same artifact reuses extracted files first, then the cached ZIP, and only downloads again if neither cache exists.
-- Cache the Build artifact list by repository and branch so the app can show the previous build list immediately on startup or before a GitHub refresh completes.
-- Select the exact firmware file to write, such as the left/right UF2 from a split ZMK build.
-- Select a Nordic/Adafruit DFU `*.zip` package and write it over BLE OTA.
-- Convert a selected UF2 into a Blueboot-compatible BLE OTA ZIP in the app, using the same defaults as `zmk-feature-blueboot`.
-- Scan for BLE OTA devices from the app, select the target half, and keep the selected BLE device address for the next update.
-- Register the ZMK bootloader volume through Android's Storage Access Framework.
-- Arm write mode, snapshot currently connected removable volumes, then treat a newly mounted removable drive as the bootloader drive.
-- Prefer newly mounted removable volumes whose names look like bootloaders, including `XIAO`, `BOOT`, `UF2`, `RP2040`, `nRF52`, or `nice!nano`.
-- If USB attach arrives before Android exposes the removable volume, poll for the bootloader drive for up to about 10 seconds.
-- If Android folder permission has not been granted yet, the app opens folder selection after detecting the new bootloader drive; after permission is granted it writes the selected firmware. Manual folder registration is kept in the side menu as a fallback.
-- Keep the selected artifact and firmware file visible after writing so the next side/board can be flashed without losing context.
-- Show determinate write progress based on bytes copied to the bootloader volume.
-- Persist the selected artifact ID and firmware filename in app preferences so USB/bootloader events or list reloads restore the same UF2 instead of falling back to the latest artifact.
-- On Activity resume, rebuild the selected artifact and firmware objects from saved preferences plus cached firmware files, so connecting a keyboard does not clear the active selection.
-- The Activity handles external keyboard configuration changes (`keyboard`, `keyboardHidden`, `navigation`) to avoid unnecessary recreation when a keyboard is plugged in.
+## できること
 
-## Important Android limitation
+- GitHub repo を `owner/repo` または `https://github.com/owner/repo` 形式で登録
+- GitHub OAuth Device Flow でログイン
+- private repo / Actions artifact download / rate limit 回避に対応
+- ブランチをリストから選択
+- GitHub Actions の successful run を読み込み
+- artifact をビルド単位でグループ表示
+- artifact 内の複数ファームウェアから対象ファイルを選択
+- artifact ZIP、展開済みファームウェア、build artifact 一覧をキャッシュ
+- USB mass storage bootloader への UF2 書き込み
+- BLE OTA DFU ZIP の書き込み
+- UF2 から Blueboot 用 BLE OTA ZIP をアプリ内で生成
+- 書き込み進捗表示
 
-Android apps cannot reliably write directly to arbitrary mounted USB mass-storage paths. This app therefore stores a persistable Storage Access Framework URI for the bootloader volume. The user must choose the bootloader folder once after the keyboard is in bootloader mode. After that, write mode can use the saved URI.
+## 基本の流れ
 
-Write mode detects bootloader insertion by comparing removable storage volumes before and after write mode is armed. A newly mounted removable volume with a bootloader-like name is treated as the bootloader drive candidate. Direct automatic writing to a never-authorized drive is not possible on Android, so first use may still require folder selection.
+1. アプリを開く
+2. `Menu` または左端スワイプでメニューを開く
+3. 必要なら `Login with GitHub` でログイン
+4. GitHub repo URL または `owner/repo` を入力
+5. 必要なら `Select Branch` でブランチを選択
+6. `Load successful Actions builds` を押す
+7. `Select Artifact` で使うビルド成果物を選択
+8. `Select Firmware` で対象ファームウェアを選択
+9. USB 書き込みまたは BLE OTA を実行
 
-## BLE OTA updates
+## GitHub ログイン
 
-BLE OTA is intended for keyboard firmware packages generated as Nordic/Adafruit DFU ZIP files, for example `keyboard_left-ble-ota.zip`.
+public repo だけなら未ログインでも一部操作できますが、Actions artifact のダウンロードや private repo ではログインが必要です。
 
-1. Load the GitHub Actions build artifact.
-2. Tap `Select Firmware` and choose the DFU `.zip` file for the target keyboard or half.
-3. Put the target keyboard or half into BLE DFU mode.
-4. Tap `Scan BLE OTA devices`.
-5. Select the advertising DFU device.
-6. Tap `Write selected ZIP over BLE OTA`.
+1. `Menu` を開く
+2. `Login with GitHub` を押す
+3. 表示されたコードは自動でクリップボードにコピーされる
+4. 開いた GitHub の device login 画面でコードを入力
+5. 認可が完了すると token がアプリに保存される
 
-USB mass-storage writing still uses `.uf2` files. BLE OTA requires a `.zip` DFU package; selecting a `.uf2`, `.bin`, or `.hex` for BLE OTA is rejected.
+token を消したい場合は `Clear GitHub token` を使います。
 
-The app uses Nordic's Android DFU library, which supports nRF51/nRF52 devices with compatible nRF5 SDK Secure or Legacy DFU bootloaders, including Adafruit-style BLE DFU packages. It is not a generic BLE file-transfer protocol; each keyboard firmware must provide a compatible DFU ZIP.
+## ブランチとビルドの選択
 
-### Blueboot UF2 conversion
+`Select Branch` は GitHub の branch API からブランチ一覧を読み込みます。
 
-For keyboards using [`zmk-feature-blueboot`](https://github.com/te9no/zmk-feature-blueboot), the app can create the BLE OTA package from the selected UF2:
+branch API が使えない場合は、最近の GitHub Actions run からブランチ名を推定して表示します。
 
-1. Select the target `.uf2` firmware from the artifact.
-2. Tap `Convert selected UF2 to BLE OTA ZIP`.
-3. The generated `*-blueboot.zip` is cached beside the extracted UF2 and selected automatically.
-4. Put the keyboard into Blueboot/BLE DFU mode.
-5. Scan and write the selected ZIP over BLE OTA.
+`Load successful Actions builds` は successful run の artifact を読み込みます。artifact は GitHub Actions の run ごとにグループ表示されます。
 
-The in-app conversion uses Blueboot's default compatibility values: SoftDevice requirement `0x0123` for S140 7.3.0 and device type `0x0052` for nRF52840. If a board uses different bootloader compatibility values, generate the ZIP in the firmware build instead.
+同じ repo / branch の build artifact 一覧はキャッシュされるため、次回起動時は前回の一覧がすぐ表示されます。GitHub から最新状態を取り直したい場合は、もう一度 `Load successful Actions builds` を押します。
 
-## GitHub login setup
+## USB ブートローダー書き込み
 
-GitHub Device Flow requires an OAuth App client ID.
+USB mass storage bootloader に `.uf2` をコピーする更新方法です。
 
-1. Create a GitHub OAuth App in GitHub developer settings.
-2. Enable Device Flow for that OAuth App.
-3. Set the OAuth App client ID in `MainActivity.GITHUB_OAUTH_CLIENT_ID`.
-4. Tap `Login with GitHub`.
-5. Enter the displayed code at `https://github.com/login/device` and authorize.
+1. artifact と `.uf2` ファイルを選択
+2. `Start write mode and wait for bootloader` を押す
+3. キーボードをブートローダーモードにする
+4. Android が新しい removable drive を認識するまで待つ
+5. 初回のみ、Android のフォルダ選択でブートローダードライブを選ぶ
+6. アプリが選択済みファームウェアを書き込む
 
-If login fails with `HTTP 400 device flow must be explicitly enabled`, open the GitHub OAuth App settings and enable `Device Flow`. The setting is per OAuth App, not per user. After enabling it, retry `Login with GitHub`.
+書き込みモード中は、既に接続されている removable drive は無視します。書き込みモードを有効にした後、新しく接続・マウントされた drive をブートローダードライブ候補として扱います。
 
-The app requests the `repo` scope so it can read Actions artifacts from private repositories. For public-only repositories, manual token entry is optional but still useful to avoid low unauthenticated API rate limits.
+候補名に以下が含まれる場合はブートローダーらしい drive として優先します。
 
-Actions artifact ZIP downloads require authentication. If the app reports `Artifact download failed: HTTP 401`, use `Clear GitHub token`, run `Login with GitHub` again, and confirm the OAuth authorization grants access to the target repository. The app uses the token only for the GitHub API request and follows the artifact redirect without attaching the bearer token to the signed download URL.
+- `XIAO`
+- `BOOT`
+- `UF2`
+- `RP2040`
+- `nRF52`
+- `nice!nano`
 
-If Android reports `Unable to resolve host github.com`, the app cannot resolve GitHub DNS from the device. Check Wi-Fi/mobile data, captive portal login, Android Private DNS, VPN/ad blocker apps, and try switching networks. The app declares both `INTERNET` and `ACCESS_NETWORK_STATE` permissions and reports Android's active network state before GitHub requests.
+Android の制限により、アプリは未許可の USB mass storage に直接書き込めません。初回は Storage Access Framework のフォルダ権限が必要です。`Register bootloader folder` はメニュー内に残してありますが、通常は書き込みモード中にブートローダードライブを検知したタイミングで選択すれば十分です。
 
-Use `Run GitHub network diagnostic` in the app to check Android network validation, DNS resolution for `github.com` and `api.github.com`, and HTTPS reachability. Use `Open network settings` to quickly switch Wi-Fi/mobile data, disable Private DNS, or turn off VPN/ad blockers.
+## BLE OTA 書き込み
 
-If the browser can open GitHub but the app still cannot resolve `github.com`, use `Open GitHub token page`, create a token, paste it into `GitHub token`, and try loading builds. A classic token needs `repo` for private repositories. A fine-grained token must be allowed for the target repository and include read access for Actions artifacts. If `api.github.com` also fails in the diagnostic, the app cannot use GitHub from that network until DNS/VPN/Private DNS is fixed.
+BLE OTA は Nordic / Adafruit DFU ZIP を使う更新方法です。`.uf2` をそのまま BLE 送信する機能ではありません。
 
-## Build
+1. artifact と BLE OTA 用 `.zip` を選択
+2. キーボードを BLE DFU モードにする
+3. `Scan BLE OTA devices` を押す
+4. 表示された `AdaDFU` / DFU デバイスを選択
+5. `Write selected ZIP over BLE OTA` を押す
 
-Open this directory in Android Studio and build the `app` module.
+保存済み BLE デバイスは、OTA 開始前に再スキャンして選び直す必要があります。DFU モードでは BLE アドレスや advertising 状態が変わる場合があり、古い選択のまま接続すると `GATT CONN TIMEOUT (147)` になりやすいためです。
 
-Use the Gradle wrapper:
+途中で転送が失敗した場合、進捗が出ていた状態なら同じ `Write selected ZIP over BLE OTA` で再試行できます。接続前にタイムアウトした場合は、キーボードを DFU モードにしたまま、もう一度スキャンして現在見えている DFU デバイスを選択してください。
+
+BLE OTA は速度優先の設定です。
+
+- MTU `517` を要求
+- Packet Receipt Notification は無効
+- DFU retry は `5` 回
+
+電波状態が悪いと失敗しやすくなります。失敗する場合は、スマホとキーボードを近づけ、他の BLE 接続を減らし、キーボードを DFU モードに入れ直してから再試行してください。
+
+## Blueboot UF2 変換
+
+[`zmk-feature-blueboot`](https://github.com/te9no/zmk-feature-blueboot) を使うキーボード向けに、選択した UF2 から BLE OTA ZIP をアプリ内で作れます。
+
+1. artifact から対象 `.uf2` を選択
+2. `Convert selected UF2 to BLE OTA ZIP` を押す
+3. 生成された `*-blueboot.zip` が自動選択される
+4. キーボードを Blueboot / BLE DFU モードにする
+5. `Scan BLE OTA devices` でデバイスを選択
+6. `Write selected ZIP over BLE OTA` を押す
+
+アプリ内変換のデフォルト値は以下です。
+
+- SoftDevice requirement: `0x0123`
+- Device type: `0x0052`
+
+これは S140 7.3.0 / nRF52840 想定です。別の互換値が必要なボードでは、ファームウェアビルド側で正しい DFU ZIP を生成してください。
+
+## キャッシュ
+
+アプリは以下をキャッシュします。
+
+- repo / branch ごとの build artifact 一覧
+- GitHub artifact ZIP
+- artifact から展開したファームウェアファイル
+- Blueboot 変換で作成した ZIP
+
+同じ artifact を選び直した場合は、まず展開済みファイルを使い、なければ cached ZIP を使い、それもなければ GitHub から再ダウンロードします。
+
+選択中の artifact と firmware はアプリ設定に保存されます。USB 接続、外部キーボード入力、Activity resume などで選択が最新 artifact に戻らないようにしています。
+
+## トラブルシュート
+
+### `Artifact download failed: HTTP 401`
+
+GitHub Actions artifact のダウンロードには認証が必要です。
+
+1. `Menu` を開く
+2. `Clear GitHub token`
+3. `Login with GitHub`
+4. 対象 repo へのアクセスを許可
+5. もう一度 build を読み込む
+
+private repo の場合、OAuth token に repo へのアクセス権が必要です。
+
+### `HTTP 400 device flow must be explicitly enabled`
+
+GitHub OAuth App 側で Device Flow が無効です。
+
+GitHub Developer settings で対象 OAuth App を開き、Device Flow を有効にしてください。この設定はユーザーごとではなく OAuth App ごとの設定です。
+
+### `Unable to resolve host github.com`
+
+Android 端末から GitHub の DNS 解決ができていません。
+
+確認する項目:
+
+- Wi-Fi / mobile data
+- captive portal login
+- Android Private DNS
+- VPN
+- ad blocker
+- network 切り替え
+
+アプリ内の `Run GitHub network diagnostic` で `github.com` / `api.github.com` の DNS と HTTPS 到達性を確認できます。
+
+### ブランチ一覧が出ない
+
+repo 名、token 権限、private repo へのアクセスを確認してください。
+
+branch API が失敗した場合、アプリは recent Actions run からブランチ候補を推定します。それも空の場合は、対象 repo に Actions run がない、または token にアクセス権がありません。
+
+### USB device attached, but drive が見えない
+
+Android が removable volume を公開するまで遅れることがあります。アプリは約 10 秒間 polling します。
+
+改善しない場合:
+
+- write mode を一度やり直す
+- キーボードをブートローダーモードに入れ直す
+- USB ケーブルを変える
+- USB OTG adapter を確認する
+- Android のファイル選択画面でブートローダードライブが見えるか確認する
+
+### BLE OTA が遅い / 失敗する
+
+BLE は端末、距離、周辺電波、キーボード側 bootloader 実装の影響を強く受けます。
+
+対処:
+
+- スマホとキーボードを近づける
+- キーボードを DFU モードに入れ直す
+- `Scan BLE OTA devices` で現在見えている DFU デバイスを選び直す
+- 他の BLE 機器との接続を減らす
+- 途中まで進んで失敗した場合は、キーボードを DFU モードのまま `Write selected ZIP over BLE OTA` を再実行する
+
+## 開発ビルド
+
+Android Studio でこのディレクトリを開き、`app` module をビルドします。
+
+Gradle wrapper で debug APK を作る場合:
 
 ```powershell
 .\gradlew.bat assembleDebug
 ```
 
+Windows で `JAVA_HOME` がない場合は、Android Studio 同梱 JBR を一時的に使えます。
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+$env:PATH="$env:JAVA_HOME\bin;$env:PATH"
+.\gradlew.bat assembleDebug
+```
+
 ## GitHub Actions release
 
-The repository includes `.github/workflows/android-release.yml`.
+`.github/workflows/android-release.yml` で署名済み release APK を作成します。
 
-- `workflow_dispatch` builds a signed release APK and uploads it as a workflow artifact.
-- Pushing a tag matching `v*` builds the signed release APK, creates a GitHub Release, and attaches the APK.
-- The workflow requires these repository secrets:
-  - `ANDROID_KEYSTORE_BASE64`
-  - `ANDROID_KEYSTORE_PASSWORD`
-  - `ANDROID_KEY_ALIAS`
-  - `ANDROID_KEY_PASSWORD`
+- `workflow_dispatch`: 署名済み release APK を workflow artifact として作成
+- `v*` tag push: GitHub Release を作成し、APK を添付
 
-Example:
+必要な repository secrets:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+例:
 
 ```powershell
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Create the keystore locally, base64-encode it, and store the encoded value in `ANDROID_KEYSTORE_BASE64`. Do not commit `.jks` or `.keystore` files.
+keystore はローカルで作成し、base64 encode した値を `ANDROID_KEYSTORE_BASE64` に保存します。`.jks` / `.keystore` は commit しないでください。
