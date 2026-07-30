@@ -108,6 +108,7 @@ public final class MainActivity extends Activity {
     private boolean pendingBleScan;
     private boolean pendingBleWrite;
     private boolean scanningBle;
+    private boolean selectedBleDeviceFresh;
     private int bootloaderPollAttempts;
     private float touchStartX;
     private float touchStartY;
@@ -158,7 +159,10 @@ public final class MainActivity extends Activity {
         public void onError(String deviceAddress, int error, int errorType, String message) {
             runOnUiThread(() -> {
                 setBusy(false);
-                setStatus("BLE OTA error: " + message + " (" + error + ")");
+                selectedBleDeviceFresh = false;
+                updateBleSummary();
+                setStatus("BLE OTA error: " + message + " (" + error + ")"
+                        + "\n" + explainBleDfuError(error, message));
             });
         }
     };
@@ -662,6 +666,7 @@ public final class MainActivity extends Activity {
         list.setBackground(neonPanel(dp(18)));
         list.setOnItemClickListener((parent, view, position, id) -> {
             selectedBleDevice = bleDevices.get(position);
+            selectedBleDeviceFresh = true;
             prefs.edit()
                     .putString("selectedBleName", selectedBleDevice.name)
                     .putString("selectedBleAddress", selectedBleDevice.address)
@@ -965,6 +970,7 @@ public final class MainActivity extends Activity {
                     prefs.getString("selectedBleName", "BLE OTA device"),
                     bleAddress,
                     0);
+            selectedBleDeviceFresh = false;
         }
         restoreSelectedInfoDisplay();
         updateBleSummary();
@@ -1269,6 +1275,13 @@ public final class MainActivity extends Activity {
             showBleDeviceSelector();
             return;
         }
+        if (!selectedBleDeviceFresh) {
+            toast("Rescan BLE OTA device first");
+            setStatus("The saved BLE OTA device may have a stale address."
+                    + "\nPut the keyboard into DFU mode, scan again, then select the currently visible AdaDFU/DFU device.");
+            showBleDeviceSelector();
+            return;
+        }
         if (!ensureBlePermissions(false)) {
             return;
         }
@@ -1287,6 +1300,14 @@ public final class MainActivity extends Activity {
                 .setUnsafeExperimentalButtonlessServiceInSecureDfuEnabled(true)
                 .setZip(selectedFirmware.file.getAbsolutePath());
         initiator.start(this, DfuUpdateService.class);
+    }
+
+    private String explainBleDfuError(int error, String message) {
+        String lower = message == null ? "" : message.toLowerCase(java.util.Locale.US);
+        if (error == 147 || lower.contains("timeout")) {
+            return "Connection timed out. Keep the keyboard in BLE DFU mode, move it close to the phone, then scan and select the current DFU advertisement again.";
+        }
+        return "If the device rebooted or left DFU mode, scan again and select the current DFU device before retrying.";
     }
 
     private void packageSelectedUf2ForBlueboot() {
@@ -1521,7 +1542,9 @@ public final class MainActivity extends Activity {
         } else {
             bleSummary.setText(selectedBleDevice.name
                     + "\n" + selectedBleDevice.address
-                    + "\nUse a .zip firmware generated for BLE OTA.");
+                    + (selectedBleDeviceFresh
+                            ? "\nReady. Use a .zip firmware generated for BLE OTA."
+                            : "\nSaved device. Rescan and select it again before OTA."));
         }
     }
 
