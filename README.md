@@ -18,6 +18,7 @@ Android app for updating ZMK keyboard firmware from GitHub Actions artifacts.
 - Cache the Build artifact list by repository and branch so the app can show the previous build list immediately on startup or before a GitHub refresh completes.
 - Select the exact firmware file to write, such as the left/right UF2 from a split ZMK build.
 - Select a Nordic/Adafruit DFU `*.zip` package and write it over BLE OTA.
+- Convert a selected UF2 into a Blueboot-compatible BLE OTA ZIP in the app, using the same defaults as `zmk-feature-blueboot`.
 - Scan for BLE OTA devices from the app, select the target half, and keep the selected BLE device address for the next update.
 - Register the ZMK bootloader volume through Android's Storage Access Framework.
 - Arm write mode, snapshot currently connected removable volumes, then treat a newly mounted removable drive as the bootloader drive.
@@ -50,6 +51,18 @@ BLE OTA is intended for keyboard firmware packages generated as Nordic/Adafruit 
 USB mass-storage writing still uses `.uf2` files. BLE OTA requires a `.zip` DFU package; selecting a `.uf2`, `.bin`, or `.hex` for BLE OTA is rejected.
 
 The app uses Nordic's Android DFU library, which supports nRF51/nRF52 devices with compatible nRF5 SDK Secure or Legacy DFU bootloaders, including Adafruit-style BLE DFU packages. It is not a generic BLE file-transfer protocol; each keyboard firmware must provide a compatible DFU ZIP.
+
+### Blueboot UF2 conversion
+
+For keyboards using [`zmk-feature-blueboot`](https://github.com/te9no/zmk-feature-blueboot), the app can create the BLE OTA package from the selected UF2:
+
+1. Select the target `.uf2` firmware from the artifact.
+2. Tap `Convert selected UF2 to BLE OTA ZIP`.
+3. The generated `*-blueboot.zip` is cached beside the extracted UF2 and selected automatically.
+4. Put the keyboard into Blueboot/BLE DFU mode.
+5. Scan and write the selected ZIP over BLE OTA.
+
+The in-app conversion uses Blueboot's default compatibility values: SoftDevice requirement `0x0123` for S140 7.3.0 and device type `0x0052` for nRF52840. If a board uses different bootloader compatibility values, generate the ZIP in the firmware build instead.
 
 ## GitHub login setup
 

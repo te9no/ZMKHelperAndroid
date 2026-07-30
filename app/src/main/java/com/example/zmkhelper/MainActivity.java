@@ -65,6 +65,7 @@ public final class MainActivity extends Activity {
     private final GitHubActionsClient github = new GitHubActionsClient();
     private final GitHubOAuthClient oauth = new GitHubOAuthClient();
     private final FirmwareWriter writer = new FirmwareWriter();
+    private final BluebootPackager bluebootPackager = new BluebootPackager();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<FirmwareBuild> builds = new ArrayList<>();
     private final List<FirmwareFile> firmwareFiles = new ArrayList<>();
@@ -337,6 +338,10 @@ public final class MainActivity extends Activity {
         Button scanBle = button("Scan BLE OTA devices");
         scanBle.setOnClickListener(v -> showBleDeviceSelector());
         bleCard.addView(scanBle);
+
+        Button packageUf2 = button("Convert selected UF2 to BLE OTA ZIP");
+        packageUf2.setOnClickListener(v -> packageSelectedUf2ForBlueboot());
+        bleCard.addView(packageUf2);
 
         Button writeBle = button("Write selected ZIP over BLE OTA");
         writeBle.setOnClickListener(v -> startBleDfu());
@@ -1068,6 +1073,55 @@ public final class MainActivity extends Activity {
                 .setUnsafeExperimentalButtonlessServiceInSecureDfuEnabled(true)
                 .setZip(selectedFirmware.file.getAbsolutePath());
         initiator.start(this, DfuUpdateService.class);
+    }
+
+    private void packageSelectedUf2ForBlueboot() {
+        if (!ensureFirmwareSelected()) {
+            return;
+        }
+        if (selectedFirmware == null || !selectedFirmware.name.toLowerCase(java.util.Locale.US).endsWith(".uf2")) {
+            toast("Select a UF2 firmware file first");
+            setStatus("Blueboot packaging converts a selected .uf2 into a BLE OTA .zip package.");
+            return;
+        }
+        FirmwareFile source = selectedFirmware;
+        setBusy(true);
+        setStatus("Creating Blueboot BLE OTA ZIP from " + source.name + "...");
+        writeExecutor.submit(() -> {
+            try {
+                FirmwareFile packaged = bluebootPackager.packageUf2(getCacheDir(), source);
+                runOnUiThread(() -> {
+                    int existing = findFirmwareIndex(packaged.name);
+                    if (existing >= 0) {
+                        firmwareFiles.set(existing, packaged);
+                    } else {
+                        firmwareFiles.add(packaged);
+                    }
+                    selectedFirmware = packaged;
+                    rememberSelectedFirmware();
+                    if (firmwareAdapter != null) {
+                        firmwareAdapter.notifyDataSetChanged();
+                    }
+                    setBusy(false);
+                    updateSelectedInfo();
+                    updatePickerSummaries();
+                    setStatus("Created BLE OTA ZIP: " + packaged.name
+                            + "\nDefault Blueboot compatibility: sd-req 0x0123, dev-type 0x0052."
+                            + "\nSelect a BLE OTA device, then write over BLE.");
+                });
+            } catch (Exception e) {
+                fail(explain(e));
+            }
+        });
+    }
+
+    private int findFirmwareIndex(String name) {
+        for (int i = 0; i < firmwareFiles.size(); i++) {
+            if (firmwareFiles.get(i).name.equals(name)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private void startWriteMode() {
