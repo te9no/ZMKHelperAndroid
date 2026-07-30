@@ -16,6 +16,17 @@ public final class RepoConfig {
         value = value.replace("https://github.com/", "");
         value = value.replace("http://github.com/", "");
         value = value.replace("git@github.com:", "");
+        int query = value.indexOf('?');
+        if (query >= 0) {
+            value = value.substring(0, query);
+        }
+        int hash = value.indexOf('#');
+        if (hash >= 0) {
+            value = value.substring(0, hash);
+        }
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
         if (value.endsWith(".git")) {
             value = value.substring(0, value.length() - 4);
         }

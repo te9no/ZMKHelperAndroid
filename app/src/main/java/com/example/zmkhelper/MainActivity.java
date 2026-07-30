@@ -507,12 +507,16 @@ public final class MainActivity extends Activity {
             try {
                 NetworkDiagnostics.requireInternet(this);
                 RepoConfig config = RepoConfig.parse(repoInput.getText().toString(), tokenInput.getText().toString());
-                List<String> loaded = github.listBranches(config);
+                BranchLoadResult result = loadBranchesWithFallback(config);
                 runOnUiThread(() -> {
                     setBusy(false);
                     branches.clear();
                     branches.add("All branches");
-                    branches.addAll(loaded);
+                    branches.addAll(result.branches);
+                    if (result.branches.isEmpty()) {
+                        setStatus("No branches found. Check repository access, then load builds.");
+                        return;
+                    }
                     Dialog dialog = fullScreenListDialog("Select Branch", branches, (position) -> {
                         String selected = branches.get(position);
                         branchInput.setText(position == 0 ? "" : selected);
@@ -522,11 +526,27 @@ public final class MainActivity extends Activity {
                     });
                     dialog.show();
                     dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+                    if (result.fallbackMessage == null) {
+                        setStatus("Loaded " + result.branches.size() + " branches.");
+                    } else {
+                        setStatus(result.fallbackMessage);
+                    }
                 });
             } catch (Exception e) {
                 fail(explain(e));
             }
         });
+    }
+
+    private BranchLoadResult loadBranchesWithFallback(RepoConfig config) throws Exception {
+        try {
+            return new BranchLoadResult(github.listBranches(config), null);
+        } catch (Exception branchError) {
+            List<String> fallback = github.listBranchesFromWorkflowRuns(config, 100);
+            String message = "Branch API failed, so branches were inferred from recent Actions runs."
+                    + "\n" + branchError.getMessage();
+            return new BranchLoadResult(fallback, message);
+        }
     }
 
     private void showArtifactSelector() {
@@ -1740,6 +1760,16 @@ public final class MainActivity extends Activity {
 
         static ArtifactListItem artifact(FirmwareBuild build) {
             return new ArtifactListItem(false, build);
+        }
+    }
+
+    private static final class BranchLoadResult {
+        final List<String> branches;
+        final String fallbackMessage;
+
+        BranchLoadResult(List<String> branches, String fallbackMessage) {
+            this.branches = branches;
+            this.fallbackMessage = fallbackMessage;
         }
     }
 

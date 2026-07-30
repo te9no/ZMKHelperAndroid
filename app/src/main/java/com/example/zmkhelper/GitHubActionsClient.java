@@ -13,8 +13,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -32,6 +34,20 @@ public final class GitHubActionsClient {
             }
         }
         return branches;
+    }
+
+    public List<String> listBranchesFromWorkflowRuns(RepoConfig config, int limit) throws Exception {
+        JSONObject root = getJson(config, API + "/repos/" + config.owner + "/" + config.repo
+                + "/actions/runs?per_page=" + limit);
+        JSONArray runs = root.getJSONArray("workflow_runs");
+        Set<String> branches = new LinkedHashSet<>();
+        for (int i = 0; i < runs.length(); i++) {
+            String branch = runs.getJSONObject(i).optString("head_branch", "");
+            if (!branch.isEmpty()) {
+                branches.add(branch);
+            }
+        }
+        return new ArrayList<>(branches);
     }
 
     public List<FirmwareBuild> listFirmwareBuilds(RepoConfig config, String branch, int limit) throws Exception {
@@ -96,7 +112,7 @@ public final class GitHubActionsClient {
         InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
         String body = readFully(stream);
         if (code < 200 || code >= 300) {
-            throw new IOException("GitHub API " + code + ": " + body);
+            throw apiException(code, body);
         }
         return new JSONObject(body);
     }
@@ -108,9 +124,22 @@ public final class GitHubActionsClient {
         InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
         String body = readFully(stream);
         if (code < 200 || code >= 300) {
-            throw new IOException("GitHub API " + code + ": " + body);
+            throw apiException(code, body);
         }
         return new JSONArray(body);
+    }
+
+    private IOException apiException(int code, String body) {
+        if (code == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            return new IOException("GitHub API 401: login with GitHub again. For private repos, the OAuth token must have repo access.");
+        }
+        if (code == HttpURLConnection.HTTP_NOT_FOUND) {
+            return new IOException("GitHub API 404: repository not found or token has no access. Check owner/repo and GitHub login.");
+        }
+        if (code == 403) {
+            return new IOException("GitHub API 403: access denied or rate limited. Login with GitHub and try again. " + body);
+        }
+        return new IOException("GitHub API " + code + ": " + body);
     }
 
     private void downloadToFile(RepoConfig config, String url, File out) throws Exception {
