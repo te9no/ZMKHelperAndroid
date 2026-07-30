@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -19,6 +20,19 @@ import java.util.zip.ZipInputStream;
 
 public final class GitHubActionsClient {
     private static final String API = "https://api.github.com";
+
+    public List<String> listBranches(RepoConfig config) throws Exception {
+        JSONArray array = getArray(config, API + "/repos/" + config.owner + "/" + config.repo + "/branches?per_page=100");
+        List<String> branches = new ArrayList<>();
+        for (int i = 0; i < array.length(); i++) {
+            JSONObject branch = array.getJSONObject(i);
+            String name = branch.optString("name", "");
+            if (!name.isEmpty()) {
+                branches.add(name);
+            }
+        }
+        return branches;
+    }
 
     public List<FirmwareBuild> listFirmwareBuilds(RepoConfig config, String branch, int limit) throws Exception {
         String url = API + "/repos/" + config.owner + "/" + config.repo + "/actions/runs?status=success&per_page=" + limit;
@@ -85,6 +99,18 @@ public final class GitHubActionsClient {
             throw new IOException("GitHub API " + code + ": " + body);
         }
         return new JSONObject(body);
+    }
+
+    private JSONArray getArray(RepoConfig config, String url) throws Exception {
+        HttpURLConnection conn = open(config, url);
+        conn.setRequestProperty("Accept", "application/vnd.github+json");
+        int code = conn.getResponseCode();
+        InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+        String body = readFully(stream);
+        if (code < 200 || code >= 300) {
+            throw new IOException("GitHub API " + code + ": " + body);
+        }
+        return new JSONArray(body);
     }
 
     private void downloadToFile(RepoConfig config, String url, File out) throws Exception {
@@ -198,7 +224,11 @@ public final class GitHubActionsClient {
     }
 
     private static String encodePath(String value) {
-        return value.replace(" ", "%20");
+        try {
+            return URLEncoder.encode(value, "UTF-8").replace("+", "%20");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return value.replace(" ", "%20");
+        }
     }
 
     private static String readFully(InputStream stream) throws IOException {

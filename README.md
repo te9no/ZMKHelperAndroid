@@ -11,7 +11,9 @@ Android app for updating ZMK keyboard firmware from GitHub Actions artifacts.
 - Keep the GitHub token field in the side menu instead of the main workflow.
 - Use `Select Artifact` and `Select Firmware` buttons that open full-screen selection lists instead of cramped embedded lists.
 - Load successful GitHub Actions workflow runs, optionally filtered by branch.
+- Select a branch from the repository branch list instead of typing the branch name manually.
 - Show available, non-expired workflow artifacts ordered by GitHub's run response.
+- Group artifact choices by GitHub Actions run/build so multiple artifacts from the same build stay together.
 - Select the latest artifact by default, or choose a specific branch/commit timestamp from the list.
 - Download the selected artifact ZIP and list every `.uf2`, `.bin`, `.hex`, or BLE OTA `.zip` file inside it.
 - Cache artifact ZIPs and extracted firmware files by GitHub artifact ID. Re-selecting the same artifact reuses extracted files first, then the cached ZIP, and only downloads again if neither cache exists.

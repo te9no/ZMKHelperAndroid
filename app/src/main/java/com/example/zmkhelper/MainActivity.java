@@ -18,7 +18,9 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Build;
@@ -30,8 +32,10 @@ import android.os.storage.StorageVolume;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -59,6 +63,15 @@ public final class MainActivity extends Activity {
     private static final int REQ_BOOTLOADER_FOLDER = 41;
     private static final int REQ_BLE_PERMISSIONS = 42;
     private static final String GITHUB_OAUTH_CLIENT_ID = "Ov23li28WjgBpOYKKb9Y";
+    private static final int COLOR_BG = 0xFF050806;
+    private static final int COLOR_PANEL = 0xFF07140C;
+    private static final int COLOR_PANEL_2 = 0xFF0B1D11;
+    private static final int COLOR_TEXT = 0xFFD8FFE4;
+    private static final int COLOR_MUTED = 0xFF7BA889;
+    private static final int COLOR_NEON = 0xFF39FF88;
+    private static final int COLOR_NEON_2 = 0xFFB6FFD1;
+    private static final int COLOR_BUTTON_A = 0xFF0C2B18;
+    private static final int COLOR_BUTTON_B = 0xFF123A22;
 
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService writeExecutor = Executors.newSingleThreadExecutor();
@@ -70,6 +83,7 @@ public final class MainActivity extends Activity {
     private final List<FirmwareBuild> builds = new ArrayList<>();
     private final List<FirmwareFile> firmwareFiles = new ArrayList<>();
     private final List<BleDeviceItem> bleDevices = new ArrayList<>();
+    private final List<String> branches = new ArrayList<>();
 
     private SharedPreferences prefs;
     private EditText repoInput;
@@ -244,14 +258,14 @@ public final class MainActivity extends Activity {
 
     private void buildUi() {
         FrameLayout frame = new FrameLayout(this);
-        frame.setBackgroundColor(0xFFF4F7FB);
+        frame.setBackground(gradientBackground());
         frame.setOnTouchListener((view, event) -> handleRootSwipe(event));
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.TOP);
-        int pad = dp(16);
-        root.setPadding(pad, dp(40), pad, pad);
+        int pad = dp(12);
+        root.setPadding(pad, dp(28), pad, pad);
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
@@ -262,7 +276,7 @@ public final class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(0, 0, 0, dp(14));
+        header.setPadding(0, 0, 0, dp(8));
         header.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -274,9 +288,9 @@ public final class MainActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText("ZMK Firmware Helper");
-        title.setTextSize(22);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(0xFF14213D);
+        title.setTextSize(21);
+        title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        title.setTextColor(COLOR_TEXT);
         title.setPadding(dp(12), 0, 0, 0);
         header.addView(title);
 
@@ -286,19 +300,22 @@ public final class MainActivity extends Activity {
         repoCard.addView(repoInput);
         repoCard.addView(branchInput);
 
+        Button selectBranch = button("Select Branch");
+        selectBranch.setOnClickListener(v -> showBranchSelector());
+
         Button save = button("Save repo");
         save.setOnClickListener(v -> savePrefs());
-        repoCard.addView(save);
 
         Button load = button("Load successful Actions builds");
         load.setOnClickListener(v -> loadBuilds());
-        repoCard.addView(load);
+        repoCard.addView(actionRow(selectBranch, save));
+        repoCard.addView(actionRow(load));
         root.addView(repoCard);
 
         LinearLayout buildsCard = card();
 
         TextView buildLabel = new TextView(this);
-        buildLabel.setText("Build artifacts");
+        buildLabel.setText("> build artifacts");
         styleSectionLabel(buildLabel);
         buildsCard.addView(buildLabel);
 
@@ -307,13 +324,13 @@ public final class MainActivity extends Activity {
         buildsCard.addView(artifactSummary);
         Button selectArtifact = button("Select Artifact");
         selectArtifact.setOnClickListener(v -> showArtifactSelector());
-        buildsCard.addView(selectArtifact);
+        buildsCard.addView(actionRow(selectArtifact));
         root.addView(buildsCard);
 
         LinearLayout firmwareCard = card();
 
         TextView firmwareLabel = new TextView(this);
-        firmwareLabel.setText("Firmware files inside selected artifact");
+        firmwareLabel.setText("> firmware files");
         styleSectionLabel(firmwareLabel);
         firmwareCard.addView(firmwareLabel);
 
@@ -322,12 +339,12 @@ public final class MainActivity extends Activity {
         firmwareCard.addView(firmwareSummary);
         Button selectFirmware = button("Select Firmware");
         selectFirmware.setOnClickListener(v -> showFirmwareSelector());
-        firmwareCard.addView(selectFirmware);
+        firmwareCard.addView(actionRow(selectFirmware));
         root.addView(firmwareCard);
 
         LinearLayout bleCard = card();
         TextView bleLabel = new TextView(this);
-        bleLabel.setText("BLE OTA update");
+        bleLabel.setText("> ble ota update");
         styleSectionLabel(bleLabel);
         bleCard.addView(bleLabel);
 
@@ -337,32 +354,31 @@ public final class MainActivity extends Activity {
 
         Button scanBle = button("Scan BLE OTA devices");
         scanBle.setOnClickListener(v -> showBleDeviceSelector());
-        bleCard.addView(scanBle);
 
         Button packageUf2 = button("Convert selected UF2 to BLE OTA ZIP");
         packageUf2.setOnClickListener(v -> packageSelectedUf2ForBlueboot());
-        bleCard.addView(packageUf2);
 
         Button writeBle = button("Write selected ZIP over BLE OTA");
         writeBle.setOnClickListener(v -> startBleDfu());
-        bleCard.addView(writeBle);
+        bleCard.addView(actionRow(scanBle, packageUf2));
+        bleCard.addView(actionRow(writeBle));
         root.addView(bleCard);
 
         LinearLayout writeCard = card();
 
         selectedInfo = new TextView(this);
         selectedInfo.setText("Selected firmware: none");
-        selectedInfo.setTextColor(0xFF1F2A44);
-        selectedInfo.setPadding(0, 0, 0, dp(12));
+        selectedInfo.setTextColor(COLOR_TEXT);
+        selectedInfo.setTextSize(14);
+        selectedInfo.setPadding(0, 0, 0, dp(8));
         writeCard.addView(selectedInfo);
 
         Button waitWrite = button("Start write mode and wait for bootloader");
         waitWrite.setOnClickListener(v -> startWriteMode());
-        writeCard.addView(waitWrite);
 
         Button writeNow = button("Write selected firmware now");
         writeNow.setOnClickListener(v -> writeSelectedBuild());
-        writeCard.addView(writeNow);
+        writeCard.addView(actionRow(waitWrite, writeNow));
 
         progress = new ProgressBar(this);
         progress.setMax(100);
@@ -372,8 +388,9 @@ public final class MainActivity extends Activity {
 
         status = new TextView(this);
         status.setText("Register a GitHub repo, load builds, select an artifact, then choose the bootloader volume folder.");
-        status.setTextColor(0xFF46556F);
-        status.setPadding(0, dp(12), 0, 0);
+        status.setTextSize(13);
+        status.setTextColor(COLOR_MUTED);
+        status.setPadding(0, dp(8), 0, 0);
         writeCard.addView(status);
         root.addView(writeCard);
 
@@ -401,13 +418,13 @@ public final class MainActivity extends Activity {
         LinearLayout menu = new LinearLayout(this);
         menu.setOrientation(LinearLayout.VERTICAL);
         menu.setPadding(dp(16), dp(24), dp(16), dp(16));
-        menu.setBackgroundColor(0xFFFDFEFF);
+        menu.setBackgroundColor(COLOR_PANEL);
 
         TextView title = new TextView(this);
         title.setText("GitHub / Network");
         title.setTextSize(20);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(0xFF14213D);
+        title.setTextColor(COLOR_TEXT);
         title.setPadding(0, 0, 0, dp(12));
         menu.addView(title);
 
@@ -478,20 +495,46 @@ public final class MainActivity extends Activity {
         menuScrim.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
+    private void showBranchSelector() {
+        savePrefs();
+        if (repoInput.getText().toString().trim().isEmpty()) {
+            toast("Repo is required");
+            return;
+        }
+        setBusy(true);
+        setStatus("Loading branches..." + authStatus());
+        networkExecutor.submit(() -> {
+            try {
+                NetworkDiagnostics.requireInternet(this);
+                RepoConfig config = RepoConfig.parse(repoInput.getText().toString(), tokenInput.getText().toString());
+                List<String> loaded = github.listBranches(config);
+                runOnUiThread(() -> {
+                    setBusy(false);
+                    branches.clear();
+                    branches.add("All branches");
+                    branches.addAll(loaded);
+                    Dialog dialog = fullScreenListDialog("Select Branch", branches, (position) -> {
+                        String selected = branches.get(position);
+                        branchInput.setText(position == 0 ? "" : selected);
+                        savePrefs();
+                        setStatus(position == 0 ? "Branch filter cleared. Load builds to refresh artifacts."
+                                : "Selected branch: " + selected + ". Load builds to refresh artifacts.");
+                    });
+                    dialog.show();
+                    dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+                });
+            } catch (Exception e) {
+                fail(explain(e));
+            }
+        });
+    }
+
     private void showArtifactSelector() {
         if (builds.isEmpty()) {
             toast("Load builds first");
             return;
         }
-        Dialog dialog = fullScreenListDialog("Select Artifact", builds, (position) -> {
-            selectedBuild = builds.get(position);
-            selectedFirmware = null;
-            firmwareFiles.clear();
-            rememberSelectedBuild();
-            updateSelectedInfo();
-            setStatus("Selected artifact: " + selectedBuild.artifactName + ". Loading firmware files...");
-            loadFirmwareFilesForSelectedBuild();
-        });
+        Dialog dialog = artifactListDialog();
         dialog.show();
         dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
     }
@@ -511,6 +554,69 @@ public final class MainActivity extends Activity {
         dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
     }
 
+    private Dialog artifactListDialog() {
+        Dialog dialog = new Dialog(this);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(18), dp(16), dp(16));
+        panel.setBackground(gradientBackground());
+
+        TextView title = new TextView(this);
+        title.setText("Select Artifact");
+        title.setTextSize(22);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(COLOR_TEXT);
+        title.setPadding(0, 0, 0, dp(10));
+        panel.addView(title);
+
+        List<ArtifactListItem> items = groupedArtifactItems();
+        ListView list = new ListView(this);
+        list.setAdapter(new ArtifactGroupAdapter(items));
+        list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+        list.setDividerHeight(dp(1));
+        list.setBackground(neonPanel(dp(18)));
+        list.setOnItemClickListener((parent, view, position, id) -> {
+            ArtifactListItem item = items.get(position);
+            if (item.header) {
+                return;
+            }
+            selectedBuild = item.build;
+            selectedFirmware = null;
+            firmwareFiles.clear();
+            rememberSelectedBuild();
+            updateSelectedInfo();
+            setStatus("Selected artifact: " + selectedBuild.artifactName + ". Loading firmware files...");
+            loadFirmwareFilesForSelectedBuild();
+            dialog.dismiss();
+        });
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f);
+        listParams.setMargins(0, 0, 0, dp(12));
+        panel.addView(list, listParams);
+
+        Button close = button("Cancel");
+        close.setOnClickListener(v -> dialog.dismiss());
+        panel.addView(close);
+
+        dialog.setContentView(panel);
+        return dialog;
+    }
+
+    private List<ArtifactListItem> groupedArtifactItems() {
+        List<ArtifactListItem> items = new ArrayList<>();
+        long currentRun = Long.MIN_VALUE;
+        for (FirmwareBuild build : builds) {
+            if (build.runId != currentRun) {
+                currentRun = build.runId;
+                items.add(ArtifactListItem.header(build));
+            }
+            items.add(ArtifactListItem.artifact(build));
+        }
+        return items;
+    }
+
     private void showBleDeviceSelector() {
         if (!ensureBlePermissions(true)) {
             return;
@@ -519,13 +625,13 @@ public final class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(16), dp(18), dp(16), dp(16));
-        panel.setBackgroundColor(0xFFF4F7FB);
+        panel.setBackground(gradientBackground());
 
         TextView title = new TextView(this);
         title.setText("Select BLE OTA Device");
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(0xFF14213D);
+        title.setTextColor(COLOR_TEXT);
         title.setPadding(0, 0, 0, dp(10));
         panel.addView(title);
 
@@ -533,7 +639,7 @@ public final class MainActivity extends Activity {
         list.setAdapter(bleAdapter);
         list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         list.setDividerHeight(dp(1));
-        list.setBackground(rounded(0xFFFFFFFF, 0xFFE4EAF2, dp(18)));
+        list.setBackground(neonPanel(dp(18)));
         list.setOnItemClickListener((parent, view, position, id) -> {
             selectedBleDevice = bleDevices.get(position);
             prefs.edit()
@@ -575,13 +681,13 @@ public final class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(16), dp(18), dp(16), dp(16));
-        panel.setBackgroundColor(0xFFF4F7FB);
+        panel.setBackground(gradientBackground());
 
         TextView title = new TextView(this);
         title.setText(titleText);
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(0xFF14213D);
+        title.setTextColor(COLOR_TEXT);
         title.setPadding(0, 0, 0, dp(10));
         panel.addView(title);
 
@@ -589,7 +695,7 @@ public final class MainActivity extends Activity {
         list.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, items));
         list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         list.setDividerHeight(dp(1));
-        list.setBackground(rounded(0xFFFFFFFF, 0xFFE4EAF2, dp(18)));
+        list.setBackground(neonPanel(dp(18)));
         list.setOnItemClickListener((parent, view, position, id) -> {
             selection.onSelected(position);
             dialog.dismiss();
@@ -659,14 +765,16 @@ public final class MainActivity extends Activity {
         EditText edit = new EditText(this);
         edit.setHint(hint);
         edit.setSingleLine(true);
-        edit.setTextColor(0xFF1F2A44);
-        edit.setHintTextColor(0xFF7E8AA2);
-        edit.setPadding(dp(14), 0, dp(14), 0);
-        edit.setBackground(rounded(0xFFFFFFFF, 0xFFD9E1EC, dp(14)));
+        edit.setTextColor(COLOR_TEXT);
+        edit.setHintTextColor(COLOR_MUTED);
+        edit.setTypeface(Typeface.MONOSPACE);
+        edit.setTextSize(14);
+        edit.setPadding(dp(12), 0, dp(12), 0);
+        edit.setBackground(neonInput(dp(12)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48));
-        params.setMargins(0, dp(6), 0, dp(6));
+                dp(42));
+        params.setMargins(0, dp(4), 0, dp(4));
         edit.setLayoutParams(params);
         return edit;
     }
@@ -675,12 +783,17 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setAllCaps(false);
+        button.setTextSize(13);
+        button.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackground(rounded(0xFF2457A6, 0xFF2457A6, dp(16)));
+        button.setBackground(neonButton(dp(13)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48));
-        params.setMargins(0, dp(6), 0, dp(6));
+                dp(42));
+        params.setMargins(0, dp(4), 0, dp(4));
         button.setLayoutParams(params);
         return button;
     }
@@ -689,25 +802,48 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setAllCaps(false);
+        button.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackground(rounded(0xFF2457A6, 0xFF2457A6, dp(14)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(112), dp(52));
+        button.setBackground(neonButton(dp(14)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(104), dp(44));
         params.setMargins(0, 0, 0, 0);
         button.setLayoutParams(params);
         return button;
     }
 
+    private LinearLayout actionRow(Button... buttons) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.setMargins(0, dp(3), 0, dp(3));
+        row.setLayoutParams(rowParams);
+        for (int i = 0; i < buttons.length; i++) {
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    0,
+                    dp(42),
+                    1f);
+            params.setMargins(i == 0 ? 0 : dp(4), 0, i == buttons.length - 1 ? 0 : dp(4), 0);
+            buttons[i].setLayoutParams(params);
+            row.addView(buttons[i]);
+        }
+        return row;
+    }
+
     private TextView summaryText(String text) {
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextSize(15);
-        view.setTextColor(0xFF46556F);
-        view.setPadding(dp(12), dp(10), dp(12), dp(10));
-        view.setBackground(rounded(0xFFF8FAFE, 0xFFD9E1EC, dp(14)));
+        view.setTextSize(14);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextColor(COLOR_MUTED);
+        view.setPadding(dp(10), dp(8), dp(10), dp(8));
+        view.setBackground(neonInset(dp(12)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, 0, 0, dp(8));
+        params.setMargins(0, 0, 0, dp(6));
         view.setLayoutParams(params);
         return view;
     }
@@ -715,22 +851,22 @@ public final class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(14), dp(14), dp(14));
-        card.setBackground(rounded(0xFFFFFFFF, 0xFFE4EAF2, dp(22)));
-        card.setElevation(dp(2));
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        card.setBackground(neonPanel(dp(18)));
+        card.setElevation(dp(6));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(10), 0, dp(10));
+        params.setMargins(0, dp(7), 0, dp(7));
         card.setLayoutParams(params);
         return card;
     }
 
     private void styleSectionLabel(TextView label) {
-        label.setTextSize(18);
-        label.setTypeface(Typeface.DEFAULT_BOLD);
-        label.setTextColor(0xFF14213D);
-        label.setPadding(0, 0, 0, dp(10));
+        label.setTextSize(16);
+        label.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        label.setTextColor(COLOR_TEXT);
+        label.setPadding(0, 0, 0, dp(7));
     }
 
     private GradientDrawable rounded(int fill, int stroke, int radius) {
@@ -739,6 +875,64 @@ public final class MainActivity extends Activity {
         drawable.setCornerRadius(radius);
         drawable.setStroke(dp(1), stroke);
         return drawable;
+    }
+
+    private GradientDrawable gradientBackground() {
+        return new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { COLOR_BG, 0xFF071009, 0xFF020403 });
+    }
+
+    private Drawable neonButton(int radius) {
+        GradientDrawable glow = new GradientDrawable();
+        glow.setColor(0x2239FF88);
+        glow.setCornerRadius(radius + dp(2));
+        glow.setStroke(dp(1), 0x6639FF88);
+
+        GradientDrawable fill = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { COLOR_BUTTON_A, COLOR_BUTTON_B });
+        fill.setCornerRadius(radius);
+        fill.setStroke(dp(1), COLOR_NEON);
+
+        LayerDrawable layer = new LayerDrawable(new Drawable[] { glow, fill });
+        layer.setLayerInset(1, dp(1), dp(1), dp(1), dp(1));
+        return layer;
+    }
+
+    private Drawable neonPanel(int radius) {
+        GradientDrawable glow = new GradientDrawable();
+        glow.setColor(0x1118FF66);
+        glow.setCornerRadius(radius + dp(2));
+        glow.setStroke(dp(1), 0x5539FF88);
+
+        GradientDrawable fill = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { COLOR_PANEL, COLOR_PANEL_2 });
+        fill.setCornerRadius(radius);
+        fill.setStroke(dp(1), 0xAA39FF88);
+
+        LayerDrawable layer = new LayerDrawable(new Drawable[] { glow, fill });
+        layer.setLayerInset(1, dp(1), dp(1), dp(1), dp(1));
+        return layer;
+    }
+
+    private Drawable neonInset(int radius) {
+        GradientDrawable fill = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { 0xFF030A06, 0xFF08140C });
+        fill.setCornerRadius(radius);
+        fill.setStroke(dp(1), 0x6639FF88);
+        return fill;
+    }
+
+    private Drawable neonInput(int radius) {
+        GradientDrawable fill = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { 0xFF020603, 0xFF07120A });
+        fill.setCornerRadius(radius);
+        fill.setStroke(dp(1), 0xAA39FF88);
+        return fill;
     }
 
     private void loadPrefs() {
@@ -1528,6 +1722,81 @@ public final class MainActivity extends Activity {
         public String toString() {
             String signal = rssi == 0 ? "" : "\nRSSI: " + rssi + " dBm";
             return name + "\n" + address + signal;
+        }
+    }
+
+    private static final class ArtifactListItem {
+        final boolean header;
+        final FirmwareBuild build;
+
+        private ArtifactListItem(boolean header, FirmwareBuild build) {
+            this.header = header;
+            this.build = build;
+        }
+
+        static ArtifactListItem header(FirmwareBuild build) {
+            return new ArtifactListItem(true, build);
+        }
+
+        static ArtifactListItem artifact(FirmwareBuild build) {
+            return new ArtifactListItem(false, build);
+        }
+    }
+
+    private final class ArtifactGroupAdapter extends BaseAdapter {
+        private final List<ArtifactListItem> items;
+
+        ArtifactGroupAdapter(List<ArtifactListItem> items) {
+            this.items = items;
+        }
+
+        @Override
+        public int getCount() {
+            return items.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return items.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            ArtifactListItem item = items.get(position);
+            return item.header ? -item.build.runId : item.build.artifactId;
+        }
+
+        @Override
+        public boolean areAllItemsEnabled() {
+            return false;
+        }
+
+        @Override
+        public boolean isEnabled(int position) {
+            return !items.get(position).header;
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            ArtifactListItem item = items.get(position);
+            TextView view = convertView instanceof TextView ? (TextView) convertView : new TextView(MainActivity.this);
+            view.setTextColor(item.header ? COLOR_NEON_2 : COLOR_TEXT);
+            view.setTextSize(item.header ? 14 : 16);
+            view.setTypeface(Typeface.DEFAULT, item.header ? Typeface.BOLD : Typeface.NORMAL);
+            view.setPadding(dp(16), item.header ? dp(14) : dp(12), dp(16), item.header ? dp(8) : dp(12));
+            view.setBackgroundColor(item.header ? 0xFF061209 : COLOR_PANEL);
+            view.setText(item.header ? artifactHeaderText(item.build) : artifactRowText(item.build));
+            return view;
+        }
+
+        private String artifactHeaderText(FirmwareBuild build) {
+            String shortSha = build.sha == null || build.sha.length() < 7 ? build.sha : build.sha.substring(0, 7);
+            String title = build.title == null || build.title.isEmpty() ? "Build" : build.title;
+            return ":: " + title + "\n" + build.branch + " @ " + shortSha + "  " + build.createdAt;
+        }
+
+        private String artifactRowText(FirmwareBuild build) {
+            return "$ artifact " + build.artifactName + "\nrun " + build.runId + " / id " + build.artifactId;
         }
     }
 }
