@@ -319,7 +319,7 @@ public final class MainActivity extends Activity {
         styleSectionLabel(buildLabel);
         buildsCard.addView(buildLabel);
 
-        buildAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, builds);
+        buildAdapter = new ThemedListAdapter<>(builds);
         artifactSummary = summaryText("No artifact selected");
         buildsCard.addView(artifactSummary);
         Button selectArtifact = button("Select Artifact");
@@ -334,7 +334,7 @@ public final class MainActivity extends Activity {
         styleSectionLabel(firmwareLabel);
         firmwareCard.addView(firmwareLabel);
 
-        firmwareAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, firmwareFiles);
+        firmwareAdapter = new ThemedListAdapter<>(firmwareFiles);
         firmwareSummary = summaryText("No firmware selected");
         firmwareCard.addView(firmwareSummary);
         Button selectFirmware = button("Select Firmware");
@@ -348,7 +348,7 @@ public final class MainActivity extends Activity {
         styleSectionLabel(bleLabel);
         bleCard.addView(bleLabel);
 
-        bleAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, bleDevices);
+        bleAdapter = new ThemedListAdapter<>(bleDevices);
         bleSummary = summaryText("No BLE DFU device selected");
         bleCard.addView(bleSummary);
 
@@ -712,7 +712,7 @@ public final class MainActivity extends Activity {
         panel.addView(title);
 
         ListView list = new ListView(this);
-        list.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, items));
+        list.setAdapter(new ThemedListAdapter<>(items));
         list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         list.setDividerHeight(dp(1));
         list.setBackground(neonPanel(dp(18)));
@@ -1770,6 +1770,24 @@ public final class MainActivity extends Activity {
         BranchLoadResult(List<String> branches, String fallbackMessage) {
             this.branches = branches;
             this.fallbackMessage = fallbackMessage;
+        }
+    }
+
+    private final class ThemedListAdapter<T> extends ArrayAdapter<T> {
+        ThemedListAdapter(List<T> items) {
+            super(MainActivity.this, android.R.layout.simple_list_item_1, items);
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            TextView view = convertView instanceof TextView ? (TextView) convertView : new TextView(MainActivity.this);
+            view.setText(String.valueOf(getItem(position)));
+            view.setTextColor(COLOR_TEXT);
+            view.setTextSize(16);
+            view.setTypeface(Typeface.MONOSPACE, Typeface.NORMAL);
+            view.setPadding(dp(18), dp(14), dp(18), dp(14));
+            view.setBackgroundColor(COLOR_PANEL);
+            return view;
         }
     }
 
