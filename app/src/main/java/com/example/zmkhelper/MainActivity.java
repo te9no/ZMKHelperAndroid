@@ -23,6 +23,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
+import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Build;
@@ -123,6 +124,9 @@ public final class MainActivity extends Activity {
     private boolean selectedBleDeviceFresh;
     private boolean bleDfuProcessStarted;
     private boolean pendingCdcBootloaderTrigger;
+    private boolean bootloaderUsbAttached;
+    private boolean bootloaderExpectedFromCdc;
+    private boolean firmwareWriteInProgress;
     private int bleDfuProgressPercent;
     private int bootloaderPollAttempts;
     private float touchStartX;
@@ -195,6 +199,10 @@ public final class MainActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction()) && writeMode) {
+                UsbDevice device = usbDeviceFromIntent(intent);
+                if (device != null && isMassStorageDevice(device)) {
+                    bootloaderUsbAttached = true;
+                }
                 handleBootloaderDriveEvent("USB device attached");
             }
         }
@@ -764,6 +772,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     updateCdcState("Bootloader triggered from CDC Port " + (triggeredPort.portIndex + 1)
                             + ". Waiting for the UF2 drive...");
+                    bootloaderExpectedFromCdc = true;
                     setStatus("CDC 1200 baud trigger sent. Waiting for a newly mounted XIAO/BOOT/UF2 drive, then the selected firmware will be written automatically.");
                     mainHandler.postDelayed(() -> {
                         if (writeMode) {
@@ -1688,15 +1697,25 @@ public final class MainActivity extends Activity {
         writeModeVolumeKeys.clear();
         writeModeVolumeKeys.addAll(currentRemovableVolumeKeys());
         bootloaderPollAttempts = 0;
+        bootloaderUsbAttached = false;
+        bootloaderExpectedFromCdc = false;
         writeMode = true;
         setStatus("Write mode is armed. Existing removable volumes: " + writeModeVolumeKeys.size()
                 + "\nPut the ZMK keyboard into bootloader mode. A newly mounted XIAO/BOOT/UF2 drive will be treated as the bootloader drive.");
     }
 
     private void writeSelectedBuild() {
+        writeSelectedBuild(false);
+    }
+
+    private void writeSelectedBuild(boolean retryWithFolderPicker) {
+        if (firmwareWriteInProgress) {
+            return;
+        }
         if (!ensureReady()) return;
         writeMode = false;
         bootloaderPollAttempts = 0;
+        firmwareWriteInProgress = true;
         setBusy(true);
         setProgressPercent(0);
         setStatus("Preparing selected firmware...");
@@ -1713,12 +1732,25 @@ public final class MainActivity extends Activity {
                     });
                 });
                 runOnUiThread(() -> {
+                    firmwareWriteInProgress = false;
                     setBusy(false);
                     setStatus("Firmware written: " + firmware.name + ". The keyboard should reboot after the bootloader processes it.");
                     updateSelectedInfo();
                 });
             } catch (Exception e) {
-                fail(explain(e));
+                runOnUiThread(() -> {
+                    firmwareWriteInProgress = false;
+                    setBusy(false);
+                    if (retryWithFolderPicker) {
+                        prefs.edit().remove("bootloaderUri").apply();
+                        pendingWriteAfterFolderPick = true;
+                        setStatus("The saved bootloader folder is unavailable: " + e.getMessage()
+                                + "\nSelect the currently mounted UF2 bootloader drive to continue writing.");
+                        pickBootloaderFolder();
+                    } else {
+                        setStatus("Error: " + explain(e).getMessage());
+                    }
+                });
             }
         });
     }
@@ -1775,24 +1807,62 @@ public final class MainActivity extends Activity {
             pickBootloaderFolder();
             return;
         }
-        writeSelectedBuild();
+        writeSelectedBuild(true);
     }
 
     private void retryBootloaderDetection(String reason, String detail) {
         if (!writeMode) {
             return;
         }
-        if (bootloaderPollAttempts >= 20) {
+        if ((bootloaderUsbAttached || bootloaderExpectedFromCdc) && bootloaderPollAttempts >= 6) {
+            continueWithKnownBootloader(reason, detail);
+            return;
+        }
+        if (bootloaderPollAttempts >= 120) {
             setStatus(reason + ". " + detail + "\nTimed out waiting for XIAO/BOOT/UF2 removable drive. Re-arm write mode and try again.");
             return;
         }
         bootloaderPollAttempts++;
-        setStatus(reason + ". " + detail + "\nWaiting for media mount... retry " + bootloaderPollAttempts + "/20");
+        setStatus(reason + ". " + detail + "\nWaiting for media mount... " + (bootloaderPollAttempts / 2) + "s");
         mainHandler.postDelayed(() -> {
             if (writeMode) {
                 handleBootloaderDriveEvent("Bootloader drive poll");
             }
         }, 500);
+    }
+
+    private void continueWithKnownBootloader(String reason, String detail) {
+        if (prefs.getString("bootloaderUri", "").isEmpty()) {
+            writeMode = false;
+            pendingWriteAfterFolderPick = true;
+            setStatus(reason + ". " + detail
+                    + "\nThe UF2 bootloader is connected, but Android did not expose it as a StorageVolume. Select the UF2 drive to continue.");
+            pickBootloaderFolder();
+            return;
+        }
+        setStatus(reason + ". " + detail
+                + "\nThe UF2 bootloader is connected. Trying the saved folder permission directly...");
+        writeSelectedBuild(true);
+    }
+
+    private UsbDevice usbDeviceFromIntent(Intent intent) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class);
+        }
+        return intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+    }
+
+    private boolean isMassStorageDevice(UsbDevice device) {
+        if (device.getDeviceClass() == android.hardware.usb.UsbConstants.USB_CLASS_MASS_STORAGE) {
+            return true;
+        }
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            if (device.getInterface(i).getInterfaceClass()
+                    == android.hardware.usb.UsbConstants.USB_CLASS_MASS_STORAGE) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String chooseBootloaderCandidate(Set<String> candidates) {
