@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.te9no.zmkhelper"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0-alpha.1"
     }
 
     signingConfigs {
@@ -41,4 +41,5 @@ android {
 
 dependencies {
     implementation("no.nordicsemi.android:dfu:2.9.0")
+    implementation("com.github.mik3y:usb-serial-for-android:3.11.0")
 }

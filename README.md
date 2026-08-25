@@ -15,6 +15,7 @@ GitHub Actions の成果物を読み込み、生成された `.uf2` / `.bin` / `
 - artifact 内の複数ファームウェアから対象ファイルを選択
 - artifact ZIP、展開済みファームウェア、build artifact 一覧をキャッシュ
 - USB mass storage bootloader への UF2 書き込み
+- USB CDC Debug ログの表示と 1200 baud ブートローダー起動
 - BLE OTA DFU ZIP の書き込み
 - UF2 から Blueboot 用 BLE OTA ZIP をアプリ内で生成
 - 書き込み進捗表示
@@ -76,6 +77,26 @@ USB mass storage bootloader に `.uf2` をコピーする更新方法です。
 - `nice!nano`
 
 Android の制限により、アプリは未許可の USB mass storage に直接書き込めません。初回は Storage Access Framework のフォルダ権限が必要です。`Register bootloader folder` はメニュー内に残してありますが、通常は書き込みモード中にブートローダードライブを検知したタイミングで選択すれば十分です。
+
+## CDC Debug
+
+CDC Debug対応ファームウェアでは、AndroidからZMKのログを確認できます。
+
+1. キーボードをUSB接続する
+2. `Open CDC Debug Console` を押す
+3. CDCポートを選択し、AndroidのUSBアクセスを許可する
+4. 115200 bpsで表示されるログを確認する
+
+StudioとCDC Debugを両方有効にしたキーボードでは、同じUSBデバイスに複数のポートが表示されます。`Port 1`、`Port 2`を切り替え、ZMKログが流れるポートを選んでください。
+
+選択中のUF2をCDC経由で書き込む場合は、コンソールの`1200 baud + Auto Write`を押します。アプリは次の順序で処理します。
+
+1. 現在接続済みのremovable driveを記録して書き込み待機を有効化
+2. 選択中のCDCポートを1200 bpsで開いて閉じる
+3. 新しくマウントされたXIAO/BOOT/UF2ドライブを検知
+4. 選択中のファームウェアを自動書き込み
+
+この操作には、キーボード側でCDC ACM bootloader triggerが有効になっている必要があります。CDC Debugのみのファームウェアではログ表示はできますが、1200 baudでブートローダーへ移行しない場合があります。
 
 ## BLE OTA 書き込み
 

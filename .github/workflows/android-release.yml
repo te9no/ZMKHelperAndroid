@@ -63,3 +63,4 @@ jobs:
         with:
           files: dist/*.apk
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -1,8 +1,10 @@
 package com.example.zmkhelper;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Dialog;
+import android.app.PendingIntent;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
@@ -62,6 +64,8 @@ import no.nordicsemi.android.dfu.DfuServiceListenerHelper;
 public final class MainActivity extends Activity {
     private static final int REQ_BOOTLOADER_FOLDER = 41;
     private static final int REQ_BLE_PERMISSIONS = 42;
+    private static final String ACTION_USB_PERMISSION = "io.github.te9no.zmkhelper.USB_PERMISSION";
+    private static final int MAX_CDC_LOG_CHARS = 120_000;
     private static final String GITHUB_OAUTH_CLIENT_ID = "Ov23li28WjgBpOYKKb9Y";
     private static final int COLOR_BG = 0xFF050806;
     private static final int COLOR_PANEL = 0xFF07140C;
@@ -79,6 +83,7 @@ public final class MainActivity extends Activity {
     private final GitHubOAuthClient oauth = new GitHubOAuthClient();
     private final FirmwareWriter writer = new FirmwareWriter();
     private final BluebootPackager bluebootPackager = new BluebootPackager();
+    private final CdcDebugManager cdcDebugManager = new CdcDebugManager();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<FirmwareBuild> builds = new ArrayList<>();
     private final List<FirmwareFile> firmwareFiles = new ArrayList<>();
@@ -92,6 +97,9 @@ public final class MainActivity extends Activity {
     private TextView artifactSummary;
     private TextView firmwareSummary;
     private TextView bleSummary;
+    private TextView cdcSummary;
+    private TextView cdcTerminal;
+    private TextView cdcConnectionStatus;
     private TextView selectedInfo;
     private TextView status;
     private ProgressBar progress;
@@ -103,6 +111,9 @@ public final class MainActivity extends Activity {
     private FirmwareBuild selectedBuild;
     private FirmwareFile selectedFirmware;
     private BleDeviceItem selectedBleDevice;
+    private CdcDebugManager.PortInfo selectedCdcPort;
+    private CdcDebugManager.PortInfo pendingCdcPort;
+    private Dialog cdcDialog;
     private boolean writeMode;
     private boolean pendingWriteAfterFolderPick;
     private boolean pendingBleScan;
@@ -110,6 +121,7 @@ public final class MainActivity extends Activity {
     private boolean scanningBle;
     private boolean selectedBleDeviceFresh;
     private boolean bleDfuProcessStarted;
+    private boolean pendingCdcBootloaderTrigger;
     private int bleDfuProgressPercent;
     private int bootloaderPollAttempts;
     private float touchStartX;
@@ -187,6 +199,32 @@ public final class MainActivity extends Activity {
         }
     };
 
+    private final BroadcastReceiver cdcPermissionReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ACTION_USB_PERMISSION.equals(intent.getAction()) || pendingCdcPort == null) {
+                return;
+            }
+            boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+            CdcDebugManager.PortInfo port = pendingCdcPort;
+            boolean trigger = pendingCdcBootloaderTrigger;
+            pendingCdcPort = null;
+            pendingCdcBootloaderTrigger = false;
+            if (!granted) {
+                if (trigger) {
+                    writeMode = false;
+                }
+                updateCdcState("USB permission denied");
+                return;
+            }
+            if (trigger) {
+                triggerCdcBootloader(port);
+            } else {
+                connectCdcPort(port);
+            }
+        }
+    };
+
     private final BroadcastReceiver mediaReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -203,6 +241,7 @@ public final class MainActivity extends Activity {
         buildUi();
         loadPrefs();
         registerReceiver(usbReceiver, new IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED));
+        registerCdcPermissionReceiver();
         IntentFilter mediaFilter = new IntentFilter(Intent.ACTION_MEDIA_MOUNTED);
         mediaFilter.addDataScheme("file");
         registerReceiver(mediaReceiver, mediaFilter);
@@ -218,9 +257,15 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         unregisterReceiver(usbReceiver);
+        unregisterReceiver(cdcPermissionReceiver);
         unregisterReceiver(mediaReceiver);
         stopBleScan();
         DfuServiceListenerHelper.unregisterProgressListener(this, dfuProgressListener);
+        cdcDebugManager.disconnect();
+        if (cdcDialog != null) {
+            cdcDialog.dismiss();
+            cdcDialog = null;
+        }
         networkExecutor.shutdownNow();
         writeExecutor.shutdownNow();
         super.onDestroy();
@@ -235,14 +280,14 @@ public final class MainActivity extends Activity {
         if (grantResults.length == 0) {
             pendingBleScan = false;
             pendingBleWrite = false;
-            setStatus("Bluetooth permission is required for BLE OTA updates.");
+            setStatus("Bluetooth and notification permissions are required for BLE OTA updates.");
             return;
         }
         for (int result : grantResults) {
             if (result != PackageManager.PERMISSION_GRANTED) {
                 pendingBleScan = false;
                 pendingBleWrite = false;
-                setStatus("Bluetooth permission is required for BLE OTA updates.");
+                setStatus("Bluetooth and notification permissions are required for BLE OTA updates.");
                 return;
             }
         }
@@ -260,8 +305,7 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_BOOTLOADER_FOLDER && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
-            int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            getContentResolver().takePersistableUriPermission(uri, flags);
+            takePersistableBootloaderPermission(uri, data.getFlags());
             prefs.edit().putString("bootloaderUri", uri.toString()).apply();
             setStatus("Bootloader folder registered: " + uri);
             if (pendingWriteAfterFolderPick) {
@@ -378,6 +422,19 @@ public final class MainActivity extends Activity {
         bleCard.addView(actionRow(scanBle, packageUf2));
         bleCard.addView(actionRow(writeBle));
         root.addView(bleCard);
+
+        LinearLayout cdcCard = card();
+        TextView cdcLabel = new TextView(this);
+        cdcLabel.setText("> cdc debug");
+        styleSectionLabel(cdcLabel);
+        cdcCard.addView(cdcLabel);
+
+        cdcSummary = summaryText("No CDC debug port selected");
+        cdcCard.addView(cdcSummary);
+        Button openCdc = button("Open CDC Debug Console");
+        openCdc.setOnClickListener(v -> showCdcConsole());
+        cdcCard.addView(actionRow(openCdc));
+        root.addView(cdcCard);
 
         LinearLayout writeCard = card();
 
@@ -508,6 +565,223 @@ public final class MainActivity extends Activity {
         }
         sideMenu.setVisibility(show ? View.VISIBLE : View.GONE);
         menuScrim.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void registerCdcPermissionReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(cdcPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(cdcPermissionReceiver, filter);
+        }
+    }
+
+    @SuppressLint("WrongConstant")
+    private void takePersistableBootloaderPermission(Uri uri, int intentFlags) {
+        int grantFlags = intentFlags
+                & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        getContentResolver().takePersistableUriPermission(uri, grantFlags);
+    }
+
+    private void showCdcConsole() {
+        if (cdcDialog != null && cdcDialog.isShowing()) {
+            return;
+        }
+        Dialog dialog = new Dialog(this);
+        cdcDialog = dialog;
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(14), dp(18), dp(14), dp(14));
+        panel.setBackground(gradientBackground());
+
+        TextView title = new TextView(this);
+        title.setText("CDC Debug Console");
+        title.setTextSize(22);
+        title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        title.setTextColor(COLOR_TEXT);
+        title.setPadding(0, 0, 0, dp(8));
+        panel.addView(title);
+
+        cdcConnectionStatus = summaryText(selectedCdcPort == null
+                ? "Select the ZMK CDC debug port. Studio and Debug may appear as separate ports."
+                : selectedCdcPort.label + "\nDisconnected");
+        panel.addView(cdcConnectionStatus);
+
+        ScrollView terminalScroll = new ScrollView(this);
+        terminalScroll.setFillViewport(true);
+        terminalScroll.setBackground(neonPanel(dp(14)));
+        cdcTerminal = new TextView(this);
+        cdcTerminal.setText("Waiting for CDC debug output at 115200 bps...\n");
+        cdcTerminal.setTextColor(COLOR_NEON_2);
+        cdcTerminal.setTextSize(12);
+        cdcTerminal.setTypeface(Typeface.MONOSPACE);
+        cdcTerminal.setPadding(dp(10), dp(10), dp(10), dp(10));
+        cdcTerminal.setTextIsSelectable(true);
+        terminalScroll.addView(cdcTerminal, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams terminalParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f);
+        terminalParams.setMargins(0, dp(8), 0, dp(8));
+        panel.addView(terminalScroll, terminalParams);
+
+        Button select = button("Select CDC Port");
+        select.setOnClickListener(v -> showCdcPortSelector());
+        Button reconnect = button("Reconnect");
+        reconnect.setOnClickListener(v -> {
+            if (selectedCdcPort == null) {
+                showCdcPortSelector();
+            } else {
+                ensureCdcPermission(selectedCdcPort, false);
+            }
+        });
+        panel.addView(actionRow(select, reconnect));
+
+        Button clear = button("Clear Log");
+        clear.setOnClickListener(v -> cdcTerminal.setText(""));
+        Button trigger = button("1200 baud + Auto Write");
+        trigger.setOnClickListener(v -> armAndTriggerCdcBootloader());
+        panel.addView(actionRow(clear, trigger));
+
+        Button close = button("Close CDC Console");
+        close.setOnClickListener(v -> dialog.dismiss());
+        panel.addView(actionRow(close));
+
+        dialog.setOnDismissListener(v -> {
+            cdcDebugManager.disconnect();
+            if (pendingCdcBootloaderTrigger) {
+                writeMode = false;
+            }
+            pendingCdcPort = null;
+            pendingCdcBootloaderTrigger = false;
+            updateCdcState(selectedCdcPort == null ? "No CDC debug port selected" : "Disconnected");
+            cdcDialog = null;
+            cdcTerminal = null;
+            cdcConnectionStatus = null;
+        });
+        dialog.setContentView(panel);
+        dialog.show();
+        dialog.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        showCdcPortSelector();
+    }
+
+    private void showCdcPortSelector() {
+        UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
+        List<CdcDebugManager.PortInfo> ports = cdcDebugManager.discover(usbManager);
+        if (ports.isEmpty()) {
+            updateCdcState("No USB CDC serial port found. Connect a CDC Debug-enabled ZMK keyboard by USB.");
+            return;
+        }
+        Dialog selector = fullScreenListDialog("Select CDC Debug Port", ports, position -> {
+            selectedCdcPort = ports.get(position);
+            updateCdcState("Requesting USB access...");
+            ensureCdcPermission(selectedCdcPort, false);
+        });
+        selector.show();
+        selector.getWindow().setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+    }
+
+    private void ensureCdcPermission(CdcDebugManager.PortInfo port, boolean triggerBootloader) {
+        UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
+        if (usbManager.hasPermission(port.device)) {
+            if (triggerBootloader) {
+                triggerCdcBootloader(port);
+            } else {
+                connectCdcPort(port);
+            }
+            return;
+        }
+        pendingCdcPort = port;
+        pendingCdcBootloaderTrigger = triggerBootloader;
+        Intent permissionIntent = new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName());
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 31) {
+            flags |= PendingIntent.FLAG_MUTABLE;
+        }
+        PendingIntent pendingIntent = PendingIntent.getBroadcast(this, 0, permissionIntent, flags);
+        usbManager.requestPermission(port.device, pendingIntent);
+    }
+
+    private void connectCdcPort(CdcDebugManager.PortInfo port) {
+        try {
+            UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
+            cdcDebugManager.connect(usbManager, port, new CdcDebugManager.Listener() {
+                @Override
+                public void onData(String text) {
+                    runOnUiThread(() -> appendCdcLog(text));
+                }
+
+                @Override
+                public void onError(Exception error) {
+                    runOnUiThread(() -> updateCdcState("CDC disconnected: " + error.getMessage()));
+                }
+            });
+            selectedCdcPort = port;
+            updateCdcState("Connected at 115200 bps");
+            appendCdcLog("\n[connected at 115200 bps]\n");
+        } catch (Exception error) {
+            updateCdcState("CDC connection failed: " + error.getMessage());
+        }
+    }
+
+    private void armAndTriggerCdcBootloader() {
+        if (selectedCdcPort == null) {
+            toast("Select a CDC port first");
+            return;
+        }
+        if (!ensureFirmwareSelected()) {
+            return;
+        }
+        startWriteMode();
+        updateCdcState("Armed auto-write. Sending the 1200 baud bootloader trigger...");
+        ensureCdcPermission(selectedCdcPort, true);
+    }
+
+    private void triggerCdcBootloader(CdcDebugManager.PortInfo port) {
+        try {
+            UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
+            cdcDebugManager.triggerBootloader(usbManager, port);
+            updateCdcState("1200 baud trigger sent. Waiting for the UF2 bootloader drive...");
+            setStatus("CDC 1200 baud trigger sent. Waiting for a newly mounted XIAO/BOOT/UF2 drive, then the selected firmware will be written automatically.");
+            mainHandler.postDelayed(() -> {
+                if (writeMode) {
+                    handleBootloaderDriveEvent("CDC 1200 baud trigger sent");
+                }
+            }, 400);
+        } catch (Exception error) {
+            writeMode = false;
+            updateCdcState("1200 baud trigger failed: " + error.getMessage());
+            setStatus("CDC bootloader trigger failed: " + error.getMessage());
+        }
+    }
+
+    private void appendCdcLog(String text) {
+        if (cdcTerminal == null || text == null || text.isEmpty()) {
+            return;
+        }
+        cdcTerminal.append(text.replace("\r\n", "\n"));
+        if (cdcTerminal.length() > MAX_CDC_LOG_CHARS) {
+            int remove = cdcTerminal.length() - MAX_CDC_LOG_CHARS;
+            cdcTerminal.setText(cdcTerminal.getText().subSequence(remove, cdcTerminal.length()));
+        }
+        cdcTerminal.post(() -> {
+            if (cdcTerminal != null && cdcTerminal.getParent() instanceof ScrollView) {
+                ((ScrollView) cdcTerminal.getParent()).fullScroll(View.FOCUS_DOWN);
+            }
+        });
+    }
+
+    private void updateCdcState(String state) {
+        String label = selectedCdcPort == null ? "" : selectedCdcPort.label + "\n";
+        if (cdcSummary != null) {
+            cdcSummary.setText(label + state);
+        }
+        if (cdcConnectionStatus != null) {
+            cdcConnectionStatus.setText(label + state);
+        }
     }
 
     private void showBranchSelector() {
@@ -1163,9 +1437,17 @@ public final class MainActivity extends Activity {
             if (forScan && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
                 missing.add(Manifest.permission.BLUETOOTH_SCAN);
             }
-        } else if (Build.VERSION.SDK_INT >= 23 && forScan
-                && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        } else if (Build.VERSION.SDK_INT >= 23 && forScan) {
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            }
+            if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+            }
+        }
+        if (!forScan && Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.POST_NOTIFICATIONS);
         }
         if (missing.isEmpty()) {
             return true;
