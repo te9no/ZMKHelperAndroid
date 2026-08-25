@@ -79,6 +79,7 @@ public final class MainActivity extends Activity {
 
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService writeExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService cdcExecutor = Executors.newSingleThreadExecutor();
     private final GitHubActionsClient github = new GitHubActionsClient();
     private final GitHubOAuthClient oauth = new GitHubOAuthClient();
     private final FirmwareWriter writer = new FirmwareWriter();
@@ -268,6 +269,7 @@ public final class MainActivity extends Activity {
         }
         networkExecutor.shutdownNow();
         writeExecutor.shutdownNow();
+        cdcExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -706,6 +708,10 @@ public final class MainActivity extends Activity {
     }
 
     private void connectCdcPort(CdcDebugManager.PortInfo port) {
+        if (cdcDebugManager.isConnectedTo(port)) {
+            updateCdcState("Already connected at 115200 bps");
+            return;
+        }
         try {
             UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
             cdcDebugManager.connect(usbManager, port, new CdcDebugManager.Listener() {
@@ -741,21 +747,38 @@ public final class MainActivity extends Activity {
     }
 
     private void triggerCdcBootloader(CdcDebugManager.PortInfo port) {
-        try {
-            UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
-            cdcDebugManager.triggerBootloader(usbManager, port);
-            updateCdcState("1200 baud trigger sent. Waiting for the UF2 bootloader drive...");
-            setStatus("CDC 1200 baud trigger sent. Waiting for a newly mounted XIAO/BOOT/UF2 drive, then the selected firmware will be written automatically.");
-            mainHandler.postDelayed(() -> {
-                if (writeMode) {
-                    handleBootloaderDriveEvent("CDC 1200 baud trigger sent");
-                }
-            }, 400);
-        } catch (Exception error) {
-            writeMode = false;
-            updateCdcState("1200 baud trigger failed: " + error.getMessage());
-            setStatus("CDC bootloader trigger failed: " + error.getMessage());
+        UsbManager usbManager = (UsbManager) getSystemService(USB_SERVICE);
+        List<CdcDebugManager.PortInfo> siblingPorts = new ArrayList<>();
+        siblingPorts.add(port);
+        for (CdcDebugManager.PortInfo candidate : cdcDebugManager.discover(usbManager)) {
+            if (candidate.device.getDeviceId() == port.device.getDeviceId()
+                    && candidate.portIndex != port.portIndex) {
+                siblingPorts.add(candidate);
+            }
         }
+        updateCdcState("Trying " + siblingPorts.size()
+                + " CDC port(s) at 1200 baud. Keep the USB cable connected...");
+        cdcExecutor.submit(() -> {
+            try {
+                CdcDebugManager.PortInfo triggeredPort = cdcDebugManager.triggerBootloader(usbManager, siblingPorts);
+                runOnUiThread(() -> {
+                    updateCdcState("Bootloader triggered from CDC Port " + (triggeredPort.portIndex + 1)
+                            + ". Waiting for the UF2 drive...");
+                    setStatus("CDC 1200 baud trigger sent. Waiting for a newly mounted XIAO/BOOT/UF2 drive, then the selected firmware will be written automatically.");
+                    mainHandler.postDelayed(() -> {
+                        if (writeMode) {
+                            handleBootloaderDriveEvent("CDC 1200 baud trigger sent");
+                        }
+                    }, 200);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    writeMode = false;
+                    updateCdcState("1200 baud trigger failed: " + error.getMessage());
+                    setStatus("CDC bootloader trigger failed: " + error.getMessage());
+                });
+            }
+        });
     }
 
     private void appendCdcLog(String text) {

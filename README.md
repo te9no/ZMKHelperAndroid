@@ -87,7 +87,7 @@ CDC Debug対応ファームウェアでは、AndroidからZMKのログを確認�
 3. CDCポートを選択し、AndroidのUSBアクセスを許可する
 4. 115200 bpsで表示されるログを確認する
 
-StudioとCDC Debugを両方有効にしたキーボードでは、同じUSBデバイスに複数のポートが表示されます。`Port 1`、`Port 2`を切り替え、ZMKログが流れるポートを選んでください。
+StudioとCDC Debugを両方有効にしたキーボードでは、同じUSBデバイスに複数のポートが表示されます。`Port 1`、`Port 2`を切り替え、ZMKログが流れるポートを選んでください。`1200 baud + Auto Write`では同じUSBデバイスの全CDCポートを順番に試すため、bootloader triggerがStudio側ポートに割り当てられていても動作します。
 
 選択中のUF2をCDC経由で書き込む場合は、コンソールの`1200 baud + Auto Write`を押します。アプリは次の順序で処理します。
 

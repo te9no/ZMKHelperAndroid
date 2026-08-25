@@ -40,6 +40,8 @@ final class CdcDebugManager {
 
     private UsbSerialPort openPort;
     private SerialInputOutputManager ioManager;
+    private int openDeviceId = -1;
+    private int openPortIndex = -1;
 
     List<PortInfo> discover(UsbManager usbManager) {
         List<PortInfo> ports = new ArrayList<>();
@@ -78,10 +80,18 @@ final class CdcDebugManager {
 
                         @Override
                         public void onRunError(Exception error) {
+                            synchronized (CdcDebugManager.this) {
+                                if (openPort == port) {
+                                    openDeviceId = -1;
+                                    openPortIndex = -1;
+                                }
+                            }
                             listener.onError(error);
                         }
                     });
             openPort = port;
+            openDeviceId = info.device.getDeviceId();
+            openPortIndex = info.portIndex;
             ioManager = manager;
             manager.start();
         } catch (IOException | RuntimeException error) {
@@ -93,8 +103,33 @@ final class CdcDebugManager {
         }
     }
 
-    synchronized void triggerBootloader(UsbManager usbManager, PortInfo info) throws IOException {
+    synchronized PortInfo triggerBootloader(UsbManager usbManager, List<PortInfo> candidates) throws IOException {
+        if (candidates.isEmpty()) {
+            throw new IOException("No CDC port is available for the bootloader trigger");
+        }
         disconnect();
+        IOException lastError = null;
+        for (PortInfo info : candidates) {
+            try {
+                touchPortAt1200Baud(usbManager, info);
+            } catch (IOException error) {
+                if (!isDeviceAttached(usbManager, info.device.getDeviceId())) {
+                    return info;
+                }
+                lastError = error;
+                continue;
+            }
+            if (!isDeviceAttached(usbManager, info.device.getDeviceId())) {
+                return info;
+            }
+        }
+        if (lastError != null) {
+            throw lastError;
+        }
+        throw new IOException("The keyboard stayed connected after trying every CDC port at 1200 baud");
+    }
+
+    private void touchPortAt1200Baud(UsbManager usbManager, PortInfo info) throws IOException {
         UsbSerialPort port = resolvePort(usbManager, info);
         UsbDeviceConnection connection = usbManager.openDevice(info.device);
         if (connection == null) {
@@ -103,10 +138,10 @@ final class CdcDebugManager {
         try {
             port.open(connection);
             port.setParameters(1200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
-            try {
-                port.setDTR(false);
-            } catch (IOException | UnsupportedOperationException ignored) {
-            }
+            port.setDTR(true);
+            waitForFirmwarePoll();
+            port.setDTR(false);
+            waitForFirmwarePoll();
         } finally {
             try {
                 port.close();
@@ -127,6 +162,14 @@ final class CdcDebugManager {
             }
             openPort = null;
         }
+        openDeviceId = -1;
+        openPortIndex = -1;
+    }
+
+    synchronized boolean isConnectedTo(PortInfo info) {
+        return openPort != null
+                && openDeviceId == info.device.getDeviceId()
+                && openPortIndex == info.portIndex;
     }
 
     private UsbSerialPort resolvePort(UsbManager usbManager, PortInfo info) throws IOException {
@@ -143,5 +186,24 @@ final class CdcDebugManager {
 
     private static String hex(int value) {
         return String.format("%04X", value & 0xFFFF);
+    }
+
+    private static void waitForFirmwarePoll() throws IOException {
+        try {
+            // The ZMK trigger polls line state every 100 ms. Hold each DTR state across two polls.
+            Thread.sleep(250);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for the CDC bootloader trigger", error);
+        }
+    }
+
+    private static boolean isDeviceAttached(UsbManager usbManager, int deviceId) {
+        for (UsbDevice device : usbManager.getDeviceList().values()) {
+            if (device.getDeviceId() == deviceId) {
+                return true;
+            }
+        }
+        return false;
     }
 }
