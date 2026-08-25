@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.te9no.zmkhelper"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.0"
+        versionCode = 6
+        versionName = "0.2.1-alpha.1"
     }
 
     signingConfigs {

@@ -104,8 +104,19 @@ public final class MainActivity extends Activity {
     private TextView cdcConnectionStatus;
     private TextView selectedInfo;
     private TextView status;
+    private TextView githubAuthState;
     private ProgressBar progress;
     private LinearLayout sideMenu;
+    private LinearLayout usbUpdatePanel;
+    private LinearLayout bleUpdatePanel;
+    private Button usbModeButton;
+    private Button bleModeButton;
+    private Button selectArtifactButton;
+    private Button selectFirmwareButton;
+    private Button waitWriteButton;
+    private Button writeNowButton;
+    private Button packageUf2Button;
+    private Button writeBleButton;
     private View menuScrim;
     private ArrayAdapter<FirmwareBuild> buildAdapter;
     private ArrayAdapter<FirmwareFile> firmwareAdapter;
@@ -246,6 +257,14 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(COLOR_BG);
+        getWindow().setNavigationBarColor(COLOR_BG);
+        int systemUi = getWindow().getDecorView().getSystemUiVisibility();
+        systemUi &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (Build.VERSION.SDK_INT >= 26) {
+            systemUi &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        getWindow().getDecorView().setSystemUiVisibility(systemUi);
         prefs = getSharedPreferences("zmk-helper", MODE_PRIVATE);
         buildUi();
         loadPrefs();
@@ -330,11 +349,12 @@ public final class MainActivity extends Activity {
         frame.setBackground(gradientBackground());
         frame.setOnTouchListener((view, event) -> handleRootSwipe(event));
         ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.TOP);
         int pad = dp(12);
-        root.setPadding(pad, dp(28), pad, pad);
+        root.setPadding(pad, dp(34), pad, dp(24));
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
@@ -352,18 +372,24 @@ public final class MainActivity extends Activity {
         root.addView(header);
 
         Button menuButton = compactButton("Menu");
+        menuButton.setContentDescription("Open account and network menu");
         menuButton.setOnClickListener(v -> showSideMenu(true));
         header.addView(menuButton);
 
-        TextView title = new TextView(this);
-        title.setText("ZMK Firmware Helper");
-        title.setTextSize(21);
-        title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        title.setTextColor(COLOR_TEXT);
-        title.setPadding(dp(12), 0, 0, 0);
-        header.addView(title);
+        LinearLayout titleBlock = new LinearLayout(this);
+        titleBlock.setOrientation(LinearLayout.VERTICAL);
+        titleBlock.setPadding(dp(12), 0, 0, 0);
+        header.addView(titleBlock, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView title = plainText("ZMK HELPER", 20, COLOR_TEXT, true);
+        titleBlock.addView(title);
+        TextView subtitle = plainText("firmware delivery console", 11, COLOR_MUTED, false);
+        titleBlock.addView(subtitle);
 
         LinearLayout repoCard = card();
+        addSectionHeader(repoCard, "01", "Firmware source",
+                "Choose a repository and successful Actions build");
         repoInput = input("GitHub repo URL or owner/repo");
         branchInput = input("Branch filter (optional)");
         repoCard.addView(repoInput);
@@ -381,100 +407,114 @@ public final class MainActivity extends Activity {
         repoCard.addView(actionRow(load));
         root.addView(repoCard);
 
-        LinearLayout buildsCard = card();
-
-        TextView buildLabel = new TextView(this);
-        buildLabel.setText("> build artifacts");
-        styleSectionLabel(buildLabel);
-        buildsCard.addView(buildLabel);
-
+        LinearLayout selectionCard = card();
+        addSectionHeader(selectionCard, "02", "Choose firmware",
+                "Confirm the run, artifact, and exact target file");
         buildAdapter = new ThemedListAdapter<>(builds);
         artifactSummary = summaryText("No artifact selected");
-        buildsCard.addView(artifactSummary);
-        Button selectArtifact = button("Select Artifact");
-        selectArtifact.setOnClickListener(v -> showArtifactSelector());
-        buildsCard.addView(actionRow(selectArtifact));
-        root.addView(buildsCard);
-
-        LinearLayout firmwareCard = card();
-
-        TextView firmwareLabel = new TextView(this);
-        firmwareLabel.setText("> firmware files");
-        styleSectionLabel(firmwareLabel);
-        firmwareCard.addView(firmwareLabel);
+        artifactSummary.setContentDescription("Selected artifact. Tap to choose an artifact");
+        artifactSummary.setOnClickListener(v -> showArtifactSelector());
+        selectionCard.addView(fieldLabel("ARTIFACT"));
+        selectionCard.addView(artifactSummary);
 
         firmwareAdapter = new ThemedListAdapter<>(firmwareFiles);
         firmwareSummary = summaryText("No firmware selected");
-        firmwareCard.addView(firmwareSummary);
-        Button selectFirmware = button("Select Firmware");
-        selectFirmware.setOnClickListener(v -> showFirmwareSelector());
-        firmwareCard.addView(actionRow(selectFirmware));
-        root.addView(firmwareCard);
+        firmwareSummary.setContentDescription("Selected firmware. Tap to choose firmware");
+        firmwareSummary.setOnClickListener(v -> showFirmwareSelector());
+        selectionCard.addView(fieldLabel("FIRMWARE FILE"));
+        selectionCard.addView(firmwareSummary);
 
-        LinearLayout bleCard = card();
-        TextView bleLabel = new TextView(this);
-        bleLabel.setText("> ble ota update");
-        styleSectionLabel(bleLabel);
-        bleCard.addView(bleLabel);
+        selectArtifactButton = button("Select Artifact");
+        selectArtifactButton.setOnClickListener(v -> showArtifactSelector());
+        selectFirmwareButton = button("Select Firmware");
+        selectFirmwareButton.setOnClickListener(v -> showFirmwareSelector());
+        selectionCard.addView(actionRow(selectArtifactButton, selectFirmwareButton));
+        root.addView(selectionCard);
+
+        LinearLayout updateCard = card();
+        addSectionHeader(updateCard, "03", "Update keyboard",
+                "Select one transport, then follow the primary action");
+
+        selectedInfo = summaryText("Selected firmware: none");
+        selectedInfo.setTextColor(COLOR_TEXT);
+        updateCard.addView(selectedInfo);
+
+        usbModeButton = button("USB UF2");
+        usbModeButton.setContentDescription("Use USB UF2 update mode");
+        bleModeButton = button("BLE OTA");
+        bleModeButton.setContentDescription("Use Bluetooth OTA update mode");
+        usbModeButton.setOnClickListener(v -> setUpdateMode("usb"));
+        bleModeButton.setOnClickListener(v -> setUpdateMode("ble"));
+        updateCard.addView(actionRow(usbModeButton, bleModeButton));
+
+        usbUpdatePanel = new LinearLayout(this);
+        usbUpdatePanel.setOrientation(LinearLayout.VERTICAL);
+        usbUpdatePanel.setPadding(0, dp(6), 0, 0);
+
+        TextView usbHelp = helperText(
+                "Arm write mode first, then start the keyboard bootloader. The selected UF2 is copied automatically.");
+        usbUpdatePanel.addView(usbHelp);
+
+        waitWriteButton = primaryButton("Wait for bootloader and write");
+        waitWriteButton.setOnClickListener(v -> startWriteMode());
+        writeNowButton = button("Write now to registered drive");
+        writeNowButton.setOnClickListener(v -> writeSelectedBuild());
+        usbUpdatePanel.addView(waitWriteButton);
+        usbUpdatePanel.addView(writeNowButton);
+        updateCard.addView(usbUpdatePanel);
+
+        bleUpdatePanel = new LinearLayout(this);
+        bleUpdatePanel.setOrientation(LinearLayout.VERTICAL);
+        bleUpdatePanel.setPadding(0, dp(6), 0, 0);
 
         bleAdapter = new ThemedListAdapter<>(bleDevices);
         bleSummary = summaryText("No BLE DFU device selected");
-        bleCard.addView(bleSummary);
+        bleSummary.setContentDescription("Selected BLE DFU device. Tap to scan");
+        bleSummary.setOnClickListener(v -> showBleDeviceSelector());
+        bleUpdatePanel.addView(fieldLabel("DFU DEVICE"));
+        bleUpdatePanel.addView(bleSummary);
 
         Button scanBle = button("Scan BLE OTA devices");
         scanBle.setOnClickListener(v -> showBleDeviceSelector());
 
-        Button packageUf2 = button("Convert selected UF2 to BLE OTA ZIP");
-        packageUf2.setOnClickListener(v -> packageSelectedUf2ForBlueboot());
+        packageUf2Button = button("Convert selected UF2 to BLE OTA ZIP");
+        packageUf2Button.setOnClickListener(v -> packageSelectedUf2ForBlueboot());
 
-        Button writeBle = button("Write selected ZIP over BLE OTA");
-        writeBle.setOnClickListener(v -> startBleDfu());
-        bleCard.addView(actionRow(scanBle, packageUf2));
-        bleCard.addView(actionRow(writeBle));
-        root.addView(bleCard);
+        writeBleButton = primaryButton("Write selected ZIP over BLE OTA");
+        writeBleButton.setOnClickListener(v -> startBleDfu());
+        bleUpdatePanel.addView(actionRow(scanBle, packageUf2Button));
+        bleUpdatePanel.addView(writeBleButton);
+        updateCard.addView(bleUpdatePanel);
+
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(100);
+        progress.setProgress(0);
+        progress.setVisibility(View.GONE);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(8));
+        progressParams.setMargins(0, dp(12), 0, dp(8));
+        progress.setLayoutParams(progressParams);
+        updateCard.addView(progress);
+
+        status = helperText("Enter a GitHub repository to begin.");
+        status.setTextColor(COLOR_MUTED);
+        status.setContentDescription("Current operation status");
+        updateCard.addView(status);
+        root.addView(updateCard);
 
         LinearLayout cdcCard = card();
-        TextView cdcLabel = new TextView(this);
-        cdcLabel.setText("> cdc debug");
-        styleSectionLabel(cdcLabel);
-        cdcCard.addView(cdcLabel);
+        addSectionHeader(cdcCard, "TOOLS", "CDC debug",
+                "Serial logs and optional 1200 baud bootloader trigger");
 
         cdcSummary = summaryText("No CDC debug port selected");
         cdcCard.addView(cdcSummary);
         Button openCdc = button("Open CDC Debug Console");
         openCdc.setOnClickListener(v -> showCdcConsole());
-        cdcCard.addView(actionRow(openCdc));
+        cdcCard.addView(openCdc);
         root.addView(cdcCard);
 
-        LinearLayout writeCard = card();
-
-        selectedInfo = new TextView(this);
-        selectedInfo.setText("Selected firmware: none");
-        selectedInfo.setTextColor(COLOR_TEXT);
-        selectedInfo.setTextSize(14);
-        selectedInfo.setPadding(0, 0, 0, dp(8));
-        writeCard.addView(selectedInfo);
-
-        Button waitWrite = button("Start write mode and wait for bootloader");
-        waitWrite.setOnClickListener(v -> startWriteMode());
-
-        Button writeNow = button("Write selected firmware now");
-        writeNow.setOnClickListener(v -> writeSelectedBuild());
-        writeCard.addView(actionRow(waitWrite, writeNow));
-
-        progress = new ProgressBar(this);
-        progress.setMax(100);
-        progress.setProgress(0);
-        progress.setVisibility(View.GONE);
-        writeCard.addView(progress);
-
-        status = new TextView(this);
-        status.setText("Register a GitHub repo, load builds, select an artifact, then choose the bootloader volume folder.");
-        status.setTextSize(13);
-        status.setTextColor(COLOR_MUTED);
-        status.setPadding(0, dp(8), 0, 0);
-        writeCard.addView(status);
-        root.addView(writeCard);
+        setUpdateMode(prefs.getString("updateMode", "usb"));
+        updateActionAvailability();
 
         menuScrim = new View(this);
         menuScrim.setBackgroundColor(0x66000000);
@@ -499,72 +539,88 @@ public final class MainActivity extends Activity {
     private LinearLayout buildSideMenu() {
         LinearLayout menu = new LinearLayout(this);
         menu.setOrientation(LinearLayout.VERTICAL);
-        menu.setPadding(dp(16), dp(24), dp(16), dp(16));
+        menu.setPadding(dp(14), dp(34), dp(14), dp(12));
         menu.setBackgroundColor(COLOR_PANEL);
 
-        TextView title = new TextView(this);
-        title.setText("GitHub / Network");
-        title.setTextSize(20);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(COLOR_TEXT);
-        title.setPadding(0, 0, 0, dp(12));
+        TextView title = plainText("CONTROL PANEL", 19, COLOR_TEXT, true);
         menu.addView(title);
+        githubAuthState = helperText(prefs.getString("token", "").isEmpty()
+                ? "GitHub: not signed in"
+                : "GitHub: signed in");
+        menu.addView(githubAuthState);
 
+        // Keep the token field as the existing state holder without exposing credentials in the UI.
         tokenInput = input("GitHub token (optional for private repos)");
-        menu.addView(tokenInput);
+        tokenInput.setVisibility(View.GONE);
+        menu.addView(tokenInput, new LinearLayout.LayoutParams(0, 0));
 
         Button close = button("Close menu");
         close.setOnClickListener(v -> showSideMenu(false));
         menu.addView(close);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        actions.setPadding(0, dp(8), 0, dp(8));
+        scroll.addView(actions);
+        menu.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        actions.addView(fieldLabel("GITHUB ACCOUNT"));
 
         Button login = button("Login with GitHub");
         login.setOnClickListener(v -> {
             showSideMenu(false);
             loginWithGitHub();
         });
-        menu.addView(login);
+        actions.addView(login);
 
         Button logout = button("Clear GitHub token");
         logout.setOnClickListener(v -> {
             showSideMenu(false);
             clearGitHubToken();
         });
-        menu.addView(logout);
+        actions.addView(logout);
+
+        actions.addView(fieldLabel("NETWORK"));
 
         Button networkCheck = button("Run GitHub network diagnostic");
         networkCheck.setOnClickListener(v -> {
             showSideMenu(false);
             runNetworkDiagnostic();
         });
-        menu.addView(networkCheck);
+        actions.addView(networkCheck);
 
         Button networkSettings = button("Open network settings");
         networkSettings.setOnClickListener(v -> {
             showSideMenu(false);
             startActivity(new Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS));
         });
-        menu.addView(networkSettings);
+        actions.addView(networkSettings);
 
         Button openGitHub = button("Open GitHub in browser");
         openGitHub.setOnClickListener(v -> {
             showSideMenu(false);
             openUrl("https://github.com");
         });
-        menu.addView(openGitHub);
+        actions.addView(openGitHub);
+
+        actions.addView(fieldLabel("ADVANCED"));
 
         Button openTokenPage = button("Open GitHub token page");
         openTokenPage.setOnClickListener(v -> {
             showSideMenu(false);
             openUrl("https://github.com/settings/tokens");
         });
-        menu.addView(openTokenPage);
+        actions.addView(openTokenPage);
 
         Button pickFolder = button("Register bootloader folder");
         pickFolder.setOnClickListener(v -> {
             showSideMenu(false);
             pickBootloaderFolder();
         });
-        menu.addView(pickFolder);
+        actions.addView(pickFolder);
 
         return menu;
     }
@@ -746,7 +802,7 @@ public final class MainActivity extends Activity {
             toast("Select a CDC port first");
             return;
         }
-        if (!ensureFirmwareSelected()) {
+        if (!ensureUf2Selected()) {
             return;
         }
         startWriteMode();
@@ -1121,6 +1177,51 @@ public final class MainActivity extends Activity {
         return edit;
     }
 
+    private TextView plainText(String text, int size, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setTypeface(Typeface.MONOSPACE, bold ? Typeface.BOLD : Typeface.NORMAL);
+        return view;
+    }
+
+    private TextView helperText(String text) {
+        TextView view = plainText(text, 12, COLOR_MUTED, false);
+        view.setLineSpacing(0, 1.12f);
+        view.setPadding(dp(2), dp(4), dp(2), dp(8));
+        return view;
+    }
+
+    private TextView fieldLabel(String text) {
+        TextView view = plainText(text, 11, COLOR_NEON, true);
+        view.setLetterSpacing(0.08f);
+        view.setPadding(dp(2), dp(5), 0, dp(4));
+        return view;
+    }
+
+    private void addSectionHeader(LinearLayout parent, String step, String title, String description) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 0, 0, dp(3));
+
+        TextView badge = plainText(step, 11, COLOR_BG, true);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(rounded(COLOR_NEON, COLOR_NEON, dp(8)));
+        row.addView(badge, new LinearLayout.LayoutParams(dp(step.length() > 2 ? 56 : 38), dp(28)));
+
+        TextView heading = plainText(title, 17, COLOR_TEXT, true);
+        heading.setPadding(dp(10), 0, 0, 0);
+        row.addView(heading, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        parent.addView(row);
+
+        TextView help = helperText(description);
+        help.setPadding(dp(48), 0, 0, dp(8));
+        parent.addView(help);
+    }
+
     private Button button(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -1134,9 +1235,17 @@ public final class MainActivity extends Activity {
         button.setBackground(neonButton(dp(13)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(42));
+                dp(48));
         params.setMargins(0, dp(4), 0, dp(4));
         button.setLayoutParams(params);
+        return button;
+    }
+
+    private Button primaryButton(String text) {
+        Button button = button(text);
+        button.setTextColor(COLOR_BG);
+        button.setTextSize(14);
+        button.setBackground(rounded(COLOR_NEON, COLOR_NEON_2, dp(13)));
         return button;
     }
 
@@ -1147,7 +1256,7 @@ public final class MainActivity extends Activity {
         button.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         button.setTextColor(0xFFFFFFFF);
         button.setBackground(neonButton(dp(14)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(104), dp(44));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(92), dp(48));
         params.setMargins(0, 0, 0, 0);
         button.setLayoutParams(params);
         return button;
@@ -1165,13 +1274,33 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < buttons.length; i++) {
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     0,
-                    dp(42),
+                    dp(48),
                     1f);
             params.setMargins(i == 0 ? 0 : dp(4), 0, i == buttons.length - 1 ? 0 : dp(4), 0);
             buttons[i].setLayoutParams(params);
             row.addView(buttons[i]);
         }
         return row;
+    }
+
+    private void setUpdateMode(String mode) {
+        boolean ble = "ble".equals(mode);
+        if (usbUpdatePanel == null || bleUpdatePanel == null) {
+            return;
+        }
+        usbUpdatePanel.setVisibility(ble ? View.GONE : View.VISIBLE);
+        bleUpdatePanel.setVisibility(ble ? View.VISIBLE : View.GONE);
+        styleModeButton(usbModeButton, !ble);
+        styleModeButton(bleModeButton, ble);
+        prefs.edit().putString("updateMode", ble ? "ble" : "usb").apply();
+    }
+
+    private void styleModeButton(Button button, boolean selected) {
+        button.setTextColor(selected ? COLOR_BG : COLOR_MUTED);
+        button.setBackground(selected
+                ? rounded(COLOR_NEON, COLOR_NEON_2, dp(13))
+                : rounded(0xFF061009, 0x665A7B64, dp(13)));
+        button.setAlpha(selected ? 1f : 0.82f);
     }
 
     private TextView summaryText(String text) {
@@ -1281,6 +1410,7 @@ public final class MainActivity extends Activity {
         repoInput.setText(prefs.getString("repo", ""));
         tokenInput.setText(prefs.getString("token", ""));
         branchInput.setText(prefs.getString("branch", ""));
+        updateGitHubAuthState();
         String bleAddress = prefs.getString("selectedBleAddress", "");
         if (!bleAddress.isEmpty()) {
             selectedBleDevice = new BleDeviceItem(
@@ -1327,6 +1457,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     tokenInput.setText(token.accessToken);
                     prefs.edit().putString("token", token.accessToken).apply();
+                    updateGitHubAuthState();
                     setBusy(false);
                     setStatus("GitHub login complete. Token stored. Scope: " + token.scope);
                 });
@@ -1339,7 +1470,17 @@ public final class MainActivity extends Activity {
     private void clearGitHubToken() {
         tokenInput.setText("");
         prefs.edit().putString("token", "").apply();
+        updateGitHubAuthState();
         setStatus("GitHub token cleared.");
+    }
+
+    private void updateGitHubAuthState() {
+        if (githubAuthState == null || tokenInput == null) {
+            return;
+        }
+        githubAuthState.setText(tokenInput.getText().toString().trim().isEmpty()
+                ? "GitHub: not signed in"
+                : "GitHub: signed in");
     }
 
     private String authStatus() {
@@ -1693,7 +1834,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startWriteMode() {
-        if (!ensureFirmwareSelected()) return;
+        if (!ensureUf2Selected()) return;
         writeModeVolumeKeys.clear();
         writeModeVolumeKeys.addAll(currentRemovableVolumeKeys());
         bootloaderPollAttempts = 0;
@@ -1776,11 +1917,23 @@ public final class MainActivity extends Activity {
     }
 
     private boolean ensureReady() {
-        if (!ensureFirmwareSelected()) {
+        if (!ensureUf2Selected()) {
             return false;
         }
         if (prefs.getString("bootloaderUri", "").isEmpty()) {
             toast("Register the bootloader folder first");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean ensureUf2Selected() {
+        if (!ensureFirmwareSelected()) {
+            return false;
+        }
+        if (!selectedFirmware.name.toLowerCase(java.util.Locale.US).endsWith(".uf2")) {
+            toast("USB bootloader writing requires a .uf2 file");
+            setStatus("Select a .uf2 firmware file for USB writing. Use BLE OTA for a DFU .zip package.");
             return false;
         }
         return true;
@@ -1940,6 +2093,7 @@ public final class MainActivity extends Activity {
                             ? "\nReady. Use a .zip firmware generated for BLE OTA."
                             : "\nSaved device. Rescan and select it again before OTA."));
         }
+        updateActionAvailability();
     }
 
     private void updatePickerSummaries() {
@@ -1964,6 +2118,32 @@ public final class MainActivity extends Activity {
                         + "\n" + (selectedFirmware.sizeBytes / 1024) + " KiB");
             }
         }
+        updateActionAvailability();
+    }
+
+    private void updateActionAvailability() {
+        boolean hasBuilds = !builds.isEmpty();
+        boolean hasFirmwareFiles = selectedBuild != null && !firmwareFiles.isEmpty();
+        String firmwareName = selectedFirmware == null
+                ? ""
+                : selectedFirmware.name.toLowerCase(java.util.Locale.US);
+        boolean hasUf2 = firmwareName.endsWith(".uf2");
+        boolean hasDfuZip = firmwareName.endsWith(".zip");
+
+        setActionEnabled(selectArtifactButton, hasBuilds);
+        setActionEnabled(selectFirmwareButton, hasFirmwareFiles);
+        setActionEnabled(waitWriteButton, hasUf2);
+        setActionEnabled(writeNowButton, hasUf2);
+        setActionEnabled(packageUf2Button, hasUf2);
+        setActionEnabled(writeBleButton, hasDfuZip && selectedBleDeviceFresh);
+    }
+
+    private void setActionEnabled(Button button, boolean enabled) {
+        if (button == null) {
+            return;
+        }
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.38f);
     }
 
     private void rememberSelectedBuild() {
