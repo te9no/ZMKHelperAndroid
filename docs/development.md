@@ -46,6 +46,7 @@ Run before a release:
 Device coverage should include:
 
 - GitHub login, logout, public/private artifact loading
+- Local UF2/ZIP import, process restart, and URI restore after cache removal
 - Branch, artifact, and firmware selection persistence
 - USB UF2 with first-time and saved folder permissions
 - CDC port selection and 1200-baud trigger

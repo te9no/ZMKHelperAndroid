@@ -12,6 +12,8 @@
 
 The app also lists `.bin` and `.hex` files found in artifacts, but those formats cannot necessarily be copied to a UF2 drive or sent through BLE DFU. Use `.uf2` for a normal UF2 bootloader and a compatible DFU `.zip` for BLE OTA.
 
+Firmware can come from GitHub Actions or directly from Android local storage. A local file does not require GitHub login, repository setup, or an internet connection.
+
 ## 2. Installation and permissions
 
 1. Download the latest `zmk-helper-*-release.apk` from [Releases](https://github.com/te9no/ZMKHelperAndroid/releases).
@@ -50,7 +52,16 @@ Follow the screen from `01 Firmware source` to `02 Choose firmware` and `03 Upda
 
 Unavailable actions are dimmed until their prerequisites are complete. For example, `Select Artifact` requires loaded builds, `Select Firmware` requires an extracted artifact, and write actions require a compatible UF2 or DFU ZIP selection.
 
-### 4.1 Repository and branch
+### 4.1 Select local firmware
+
+1. Tap `Choose local UF2 / ZIP` under `01 Firmware source`.
+2. Select a `.uf2` or BLE DFU `.zip` in Android's document picker.
+3. Confirm that `02 Choose firmware` shows `Local file` and the selected file name.
+4. Select `USB UF2` or `BLE OTA` under `03 Update keyboard` and start the update.
+
+The selected document is copied into the app's private cache. When the document provider supports persistent read access, its URI is also saved and used to restore the selection if the cache copy is lost. Empty files, files over 64 MiB, and formats other than `.uf2` or `.zip` are rejected.
+
+### 4.2 Repository and branch
 
 1. Enter `owner/repo` or `https://github.com/owner/repo` in `GitHub repo URL or owner/repo`.
 2. Tap `Save repo`.
@@ -60,7 +71,7 @@ Unavailable actions are dimmed until their prerequisites are complete. For examp
 
 If the branch API fails, the app infers branch names from recent Actions runs. For a private repository, the signed-in account must have access.
 
-### 4.2 Artifact and firmware
+### 4.3 Artifact and firmware
 
 1. Tap `Select Artifact`.
 2. Select an artifact from the list grouped by workflow run.

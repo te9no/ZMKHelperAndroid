@@ -19,6 +19,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -32,6 +33,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
+import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -50,6 +52,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -65,6 +70,9 @@ import no.nordicsemi.android.dfu.DfuServiceListenerHelper;
 public final class MainActivity extends Activity {
     private static final int REQ_BOOTLOADER_FOLDER = 41;
     private static final int REQ_BLE_PERMISSIONS = 42;
+    private static final int REQ_LOCAL_FIRMWARE = 43;
+    private static final long LOCAL_ARTIFACT_ID = -2L;
+    private static final long MAX_LOCAL_FIRMWARE_BYTES = 64L * 1024L * 1024L;
     private static final String ACTION_USB_PERMISSION = "io.github.te9no.zmkhelper.USB_PERMISSION";
     private static final int MAX_CDC_LOG_CHARS = 120_000;
     private static final String GITHUB_OAUTH_CLIENT_ID = "Ov23li28WjgBpOYKKb9Y";
@@ -138,6 +146,7 @@ public final class MainActivity extends Activity {
     private boolean bootloaderUsbAttached;
     private boolean bootloaderExpectedFromCdc;
     private boolean firmwareWriteInProgress;
+    private boolean localRestoreInProgress;
     private int bleDfuProgressPercent;
     private int bootloaderPollAttempts;
     private float touchStartX;
@@ -341,6 +350,12 @@ public final class MainActivity extends Activity {
                 pendingWriteAfterFolderPick = false;
                 writeSelectedBuild();
             }
+        } else if (requestCode == REQ_LOCAL_FIRMWARE && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) {
+                persistLocalFirmwarePermission(uri, data.getFlags());
+                importLocalFirmware(uri, false);
+            }
         }
     }
 
@@ -389,7 +404,15 @@ public final class MainActivity extends Activity {
 
         LinearLayout repoCard = card();
         addSectionHeader(repoCard, "01", "Firmware source",
-                "Choose a repository and successful Actions build");
+                "Choose a local file or a successful GitHub Actions build");
+
+        Button chooseLocal = primaryButton("Choose local UF2 / ZIP");
+        chooseLocal.setContentDescription("Choose firmware from Android local storage");
+        chooseLocal.setOnClickListener(v -> pickLocalFirmware());
+        repoCard.addView(chooseLocal);
+        repoCard.addView(helperText("No GitHub account or repository is required for a local file."));
+        repoCard.addView(fieldLabel("OR USE GITHUB ACTIONS"));
+
         repoInput = input("GitHub repo URL or owner/repo");
         branchInput = input("Branch filter (optional)");
         repoCard.addView(repoInput);
@@ -1601,6 +1624,174 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, REQ_BOOTLOADER_FOLDER);
     }
 
+    private void pickLocalFirmware() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+                "application/octet-stream",
+                "application/zip",
+                "application/x-zip-compressed"
+        });
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, REQ_LOCAL_FIRMWARE);
+    }
+
+    private void persistLocalFirmwarePermission(Uri uri, int intentFlags) {
+        int grantFlags = intentFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        if (grantFlags == 0) {
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(uri, grantFlags);
+        } catch (SecurityException | IllegalArgumentException ignored) {
+            // Some document providers grant access only for the current read; the cached copy still works.
+        }
+    }
+
+    private void importLocalFirmware(Uri uri, boolean restoring) {
+        if (uri == null || localRestoreInProgress) {
+            return;
+        }
+        localRestoreInProgress = true;
+        setBusy(true);
+        setStatus(restoring ? "Restoring local firmware selection..." : "Importing local firmware...");
+        writeExecutor.submit(() -> {
+            try {
+                LocalDocument document = readLocalDocument(uri);
+                String lower = document.name.toLowerCase(java.util.Locale.US);
+                if (!lower.endsWith(".uf2") && !lower.endsWith(".zip")) {
+                    throw new IOException("Choose a .uf2 firmware file or a BLE DFU .zip package");
+                }
+                if (document.sizeBytes > MAX_LOCAL_FIRMWARE_BYTES) {
+                    throw new IOException("Local firmware is larger than 64 MiB");
+                }
+                File imported = copyLocalDocument(uri, document.name);
+                FirmwareFile firmware = new FirmwareFile(
+                        document.name,
+                        "Android local storage",
+                        imported,
+                        imported.length());
+                runOnUiThread(() -> applyLocalFirmwareSelection(uri, firmware));
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    localRestoreInProgress = false;
+                    setBusy(false);
+                    setStatus("Local firmware import failed: " + error.getMessage());
+                    if (!restoring) {
+                        toast("Could not import local firmware");
+                    }
+                });
+            }
+        });
+    }
+
+    private LocalDocument readLocalDocument(Uri uri) throws IOException {
+        String name = null;
+        long size = -1L;
+        try (Cursor cursor = getContentResolver().query(
+                uri,
+                new String[] { OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE },
+                null,
+                null,
+                null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                int sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (nameColumn >= 0 && !cursor.isNull(nameColumn)) {
+                    name = cursor.getString(nameColumn);
+                }
+                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
+                    size = cursor.getLong(sizeColumn);
+                }
+            }
+        }
+        if (name == null || name.trim().isEmpty()) {
+            name = uri.getLastPathSegment();
+        }
+        if (name == null || name.trim().isEmpty()) {
+            throw new IOException("The selected document has no file name");
+        }
+        name = name.replace('\\', '_').replace('/', '_').trim();
+        return new LocalDocument(name, size);
+    }
+
+    private File copyLocalDocument(Uri uri, String displayName) throws IOException {
+        File directory = new File(getCacheDir(), "local-firmware");
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IOException("Could not create the local firmware cache");
+        }
+        String safeName = displayName.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safeName.isEmpty()) {
+            safeName = "firmware.uf2";
+        }
+        File output = new File(directory, Integer.toHexString(uri.toString().hashCode()) + "-" + safeName);
+        File temporary = new File(output.getAbsolutePath() + ".part");
+        long copied = 0L;
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             FileOutputStream out = new FileOutputStream(temporary)) {
+            if (in == null) {
+                throw new IOException("Could not open the selected document");
+            }
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                copied += read;
+                if (copied > MAX_LOCAL_FIRMWARE_BYTES) {
+                    throw new IOException("Local firmware is larger than 64 MiB");
+                }
+                out.write(buffer, 0, read);
+            }
+            out.flush();
+        } catch (IOException error) {
+            temporary.delete();
+            throw error;
+        }
+        if (copied == 0L) {
+            temporary.delete();
+            throw new IOException("The selected firmware file is empty");
+        }
+        if (output.exists() && !output.delete()) {
+            temporary.delete();
+            throw new IOException("Could not replace the cached local firmware");
+        }
+        if (!temporary.renameTo(output)) {
+            temporary.delete();
+            throw new IOException("Could not finish importing local firmware");
+        }
+        return output;
+    }
+
+    private void applyLocalFirmwareSelection(Uri uri, FirmwareFile firmware) {
+        selectedBuild = localFirmwareBuild();
+        firmwareFiles.clear();
+        firmwareFiles.add(firmware);
+        selectedFirmware = firmware;
+        prefs.edit().putString("localFirmwareUri", uri.toString()).apply();
+        rememberSelectedFirmware();
+        if (firmwareAdapter != null) {
+            firmwareAdapter.notifyDataSetChanged();
+        }
+        localRestoreInProgress = false;
+        setBusy(false);
+        updateSelectedInfo();
+        setStatus("Local firmware ready: " + firmware.name
+                + "\nNo GitHub repository is required. Select USB UF2 or BLE OTA below.");
+    }
+
+    private FirmwareBuild localFirmwareBuild() {
+        return new FirmwareBuild(
+                0L,
+                "local storage",
+                "local",
+                "Imported from Android storage",
+                "Local firmware",
+                "",
+                LOCAL_ARTIFACT_ID,
+                "Local file",
+                "");
+    }
+
     private boolean ensureBlePermissions(boolean forScan) {
         List<String> missing = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= 31) {
@@ -1897,19 +2088,19 @@ public final class MainActivity extends Activity {
     }
 
     private boolean ensureFirmwareSelected() {
-        if (repoInput.getText().toString().trim().isEmpty()) {
-            toast("Repo is required");
-            return false;
-        }
         if (selectedBuild == null) {
             if (builds.isEmpty()) {
-                toast("Load builds first");
+                toast("Choose a local firmware file or load GitHub builds first");
                 return false;
             }
             selectedBuild = builds.get(0);
         }
+        if (!isLocalSelection() && repoInput.getText().toString().trim().isEmpty()) {
+            toast("Repo is required for a GitHub artifact");
+            return false;
+        }
         if (selectedFirmware == null) {
-            toast("Select a firmware file inside the artifact first");
+            toast("Select a firmware file first");
             return false;
         }
         updateSelectedInfo();
@@ -2070,6 +2261,13 @@ public final class MainActivity extends Activity {
             updatePickerSummaries();
             return;
         }
+        if (isLocalSelection()) {
+            selectedInfo.setText("Selected firmware: " + selectedFirmware.name
+                    + "\nSource: Android local storage"
+                    + "\nSize: " + formatFileSize(selectedFirmware.sizeBytes));
+            updatePickerSummaries();
+            return;
+        }
         String shortSha = selectedBuild.sha == null || selectedBuild.sha.length() < 7
                 ? selectedBuild.sha
                 : selectedBuild.sha.substring(0, 7);
@@ -2100,6 +2298,8 @@ public final class MainActivity extends Activity {
         if (artifactSummary != null) {
             if (selectedBuild == null) {
                 artifactSummary.setText("No artifact selected");
+            } else if (isLocalSelection()) {
+                artifactSummary.setText("Local file\nNo GitHub repository required");
             } else {
                 String shortSha = selectedBuild.sha == null || selectedBuild.sha.length() < 7
                         ? selectedBuild.sha
@@ -2115,7 +2315,7 @@ public final class MainActivity extends Activity {
             } else {
                 firmwareSummary.setText(selectedFirmware.name
                         + "\n" + selectedFirmware.zipPath
-                        + "\n" + (selectedFirmware.sizeBytes / 1024) + " KiB");
+                        + "\n" + formatFileSize(selectedFirmware.sizeBytes));
             }
         }
         updateActionAvailability();
@@ -2164,14 +2364,22 @@ public final class MainActivity extends Activity {
         if (selectedBuild == null || selectedFirmware == null) {
             return;
         }
-        prefs.edit()
+        SharedPreferences.Editor editor = prefs.edit()
                 .putLong("selectedArtifactId", selectedBuild.artifactId)
                 .putString("selectedFirmwareName", selectedFirmware.name)
                 .putString("selectedArtifactName", selectedBuild.artifactName)
                 .putString("selectedBranch", selectedBuild.branch)
                 .putString("selectedSha", selectedBuild.sha)
-                .putString("selectedCreatedAt", selectedBuild.createdAt)
-                .apply();
+                .putString("selectedCreatedAt", selectedBuild.createdAt);
+        if (isLocalSelection()) {
+            editor.putString("localFirmwarePath", selectedFirmware.file.getAbsolutePath())
+                    .putString("localFirmwareZipPath", selectedFirmware.zipPath);
+        } else {
+            editor.remove("localFirmwarePath")
+                    .remove("localFirmwareZipPath")
+                    .remove("localFirmwareUri");
+        }
+        editor.apply();
     }
 
     private FirmwareBuild restoreSelectedBuild(List<FirmwareBuild> candidates) {
@@ -2214,6 +2422,17 @@ public final class MainActivity extends Activity {
             updatePickerSummaries();
             return;
         }
+        if (prefs.getLong("selectedArtifactId", -1L) == LOCAL_ARTIFACT_ID) {
+            selectedInfo.setText("Selected firmware: " + firmware
+                    + "\nSource: Android local storage");
+            if (artifactSummary != null) {
+                artifactSummary.setText("Local file\nNo GitHub repository required");
+            }
+            if (firmwareSummary != null) {
+                firmwareSummary.setText(firmware + "\nAndroid local storage");
+            }
+            return;
+        }
         String sha = prefs.getString("selectedSha", "");
         String shortSha = sha.length() < 7 ? sha : sha.substring(0, 7);
         selectedInfo.setText("Selected firmware: " + firmware
@@ -2241,6 +2460,31 @@ public final class MainActivity extends Activity {
             restoreSelectedInfoDisplay();
             return;
         }
+        if (artifactId == LOCAL_ARTIFACT_ID) {
+            File cached = new File(prefs.getString("localFirmwarePath", ""));
+            if (cached.isFile()) {
+                selectedBuild = localFirmwareBuild();
+                selectedFirmware = new FirmwareFile(
+                        firmwareName,
+                        prefs.getString("localFirmwareZipPath", "Android local storage"),
+                        cached,
+                        cached.length());
+                firmwareFiles.clear();
+                firmwareFiles.add(selectedFirmware);
+                if (firmwareAdapter != null) {
+                    firmwareAdapter.notifyDataSetChanged();
+                }
+                updateSelectedInfo();
+                return;
+            }
+            String uri = prefs.getString("localFirmwareUri", "");
+            if (!uri.isEmpty()) {
+                importLocalFirmware(Uri.parse(uri), true);
+            } else {
+                restoreSelectedInfoDisplay();
+            }
+            return;
+        }
         selectedBuild = new FirmwareBuild(
                 0,
                 prefs.getString("selectedBranch", ""),
@@ -2261,6 +2505,10 @@ public final class MainActivity extends Activity {
             }
         }
         updateSelectedInfo();
+    }
+
+    private boolean isLocalSelection() {
+        return selectedBuild != null && selectedBuild.artifactId == LOCAL_ARTIFACT_ID;
     }
 
     private void setBusy(boolean busy) {
@@ -2322,6 +2570,26 @@ public final class MainActivity extends Activity {
 
     private int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private String formatFileSize(long bytes) {
+        if (bytes < 1024L) {
+            return bytes + " B";
+        }
+        if (bytes < 1024L * 1024L) {
+            return (bytes / 1024L) + " KiB";
+        }
+        return String.format(java.util.Locale.US, "%.1f MiB", bytes / (1024.0 * 1024.0));
+    }
+
+    private static final class LocalDocument {
+        final String name;
+        final long sizeBytes;
+
+        LocalDocument(String name, long sizeBytes) {
+            this.name = name;
+            this.sizeBytes = sizeBytes;
+        }
     }
 
     private static final class BleDeviceItem {

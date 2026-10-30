@@ -12,6 +12,8 @@
 
 `.bin`と`.hex`もartifact内に表示されますが、UF2ドライブへのコピーやBLE DFUにそのまま使用できるとは限りません。通常のUF2 bootloaderでは`.uf2`、BLE OTAでは対応するDFU `.zip`を使用してください。
 
+ファイルはGitHub Actionsから取得するほか、Android端末内のlocal storageから直接選択できます。local fileを使う場合、GitHub login、repository登録、インターネット接続は不要です。
+
 ## 2. インストールと権限
 
 1. [Releases](https://github.com/te9no/ZMKHelperAndroid/releases)から最新の`zmk-helper-*-release.apk`を取得します。
@@ -50,7 +52,16 @@ tokenはAndroidのアプリ専用設定に保存され、画面には表示さ�
 
 前の手順が完了するまで、利用できないボタンは薄く表示されます。たとえばbuildを取得するまで`Select Artifact`、artifactを展開するまで`Select Firmware`、UF2またはDFU ZIPを選ぶまでwriteボタンは有効になりません。
 
-### 4.1 Repositoryとbranch
+### 4.1 端末内のlocal firmwareを選ぶ
+
+1. `01 Firmware source`の`Choose local UF2 / ZIP`を押します。
+2. Androidのdocument pickerから対象`.uf2`またはBLE DFU `.zip`を選びます。
+3. `02 Choose firmware`に`Local file`とファイル名が表示されたことを確認します。
+4. `03 Update keyboard`で`USB UF2`または`BLE OTA`を選び、更新を開始します。
+
+選択したファイルはアプリ専用cacheへコピーされます。document providerが永続的な読み取り権限に対応している場合はURIも保存され、cacheが失われた場合の復元に使用されます。64 MiBを超えるファイル、空ファイル、`.uf2` / `.zip`以外は取り込みません。
+
+### 4.2 Repositoryとbranch
 
 1. `GitHub repo URL or owner/repo`へ`owner/repo`または`https://github.com/owner/repo`を入力します。
 2. `Save repo`を押します。
@@ -60,7 +71,7 @@ tokenはAndroidのアプリ専用設定に保存され、画面には表示さ�
 
 branch APIが失敗した場合、アプリは最近のActions runからbranch名を推定します。private repositoryでは、ログインしたGitHubアカウントにrepositoryへのアクセス権が必要です。
 
-### 4.2 Artifactとfirmware
+### 4.3 Artifactとfirmware
 
 1. `Select Artifact`を押します。
 2. workflow runごとにグループ化された一覧からartifactを選びます。
