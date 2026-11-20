@@ -20,6 +20,8 @@ let viewer = localStorage.getItem("github-viewer") || "";
 let repoText = localStorage.getItem("repo") || "";
 let branch = localStorage.getItem("branch") || "";
 let branches: string[] = [];
+let listKey = "";
+let listRepo = "";
 let builds: Build[] = [];
 let firmwareFiles: Firmware[] = [];
 let selectedBuild: Build | undefined;
@@ -36,29 +38,21 @@ restoreCachedBuilds();
 registerServiceWorker();
 
 function render(): void {
+  const consoleOpen = document.querySelector<HTMLDetailsElement>(".usb-panel")?.open ?? false;
   app.innerHTML = `
     <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
     <header class="topbar">
-      <button class="icon-button" id="menu-button" aria-label="設定を開く">☰</button>
-      <div class="brand"><span class="brand-mark">Z</span><div><strong>ZMK Firmware Helper</strong><small>WEB / PWA</small></div></div>
+      <button class="icon-button" id="menu-button" aria-controls="drawer" aria-expanded="false" aria-label="設定を開く">☰</button>
+      <div class="brand"><img class="app-mark" src="./icons/icon-192.png" alt="" width="40" height="40"><div><strong>ZMK Firmware Helper</strong></div></div>
       <span class="connection ${token ? "online" : ""}">${token ? `GitHub: ${escapeHtml(viewer || "signed in")}` : "Guest mode"}</span>
     </header>
 
     <main>
-      <section class="hero">
-        <p class="eyebrow">FIRMWARE DELIVERY CONSOLE</p>
-        <h1>Buildを選ぶ。<br><em>安全に保存する。</em></h1>
-        <p>AndroidとiPadで、GitHub Actionsまたは端末内のZMKファームウェアを扱えます。</p>
-      </section>
+      <header class="workspace-title"><h1>ファームウェア更新</h1><p>キーボードのボードと左右を確認して、対象のファイルを選んでください。</p></header>
 
       <div class="step-grid">
         <section class="panel source-panel">
-          <div class="step-heading"><span>01</span><div><h2>ファームウェアソース</h2><p>ローカルファイルならGitHubログインは不要です。</p></div></div>
-          <label class="file-drop" for="local-file">
-            <span class="drop-icon">＋</span><strong>端末からUF2 / ZIPを選択</strong><small>最大64 MiB・処理は端末内で完結</small>
-          </label>
-          <input id="local-file" type="file" accept=".uf2,.zip,application/zip,application/octet-stream" hidden />
-          <div class="divider"><span>OR GITHUB ACTIONS</span></div>
+          <div class="step-heading"><span>01</span><div><h2>GitHubからビルドを選択</h2><p>リポジトリを入力し、必要ならブランチで絞り込んでください。</p></div></div>
           <label class="field"><span>Repository</span><input id="repo" value="${escapeHtml(repoText)}" placeholder="owner/repository" autocomplete="off" /></label>
           <div class="source-actions">
             <label class="field grow"><span>Branch</span>
@@ -70,6 +64,11 @@ function render(): void {
             <button class="secondary align-bottom" id="load-branches" ${busy ? "disabled" : ""}>Branches</button>
           </div>
           <button class="primary full" id="load-builds" ${busy ? "disabled" : ""}>成功したActionsビルドを読み込む</button>
+          <div class="divider"><span>またはログインせずに</span></div>
+          <button type="button" class="file-drop" id="choose-local" ${busy ? "disabled" : ""}>
+            <span class="drop-icon">＋</span><strong>端末からUF2 / ZIPを選択</strong><small>最大64 MiB・処理は端末内で完結</small>
+          </button>
+          <input id="local-file" type="file" accept=".uf2,.zip,application/zip,application/octet-stream" hidden />
         </section>
 
         <section class="panel builds-panel">
@@ -91,7 +90,7 @@ function render(): void {
         </section>
       </div>
 
-      <section class="panel usb-panel">
+      <details class="panel usb-panel" ${consoleOpen ? "open" : ""}><summary>USB 診断・CDC ログ</summary>
         <div class="step-heading"><span>USB</span><div><h2>CDC Debug Console</h2><p>${webUsbAvailable() ? "Android Chrome / WebUSB" : "このブラウザではWebUSBを利用できません"}</p></div></div>
         <div class="usb-layout">
           <pre id="usb-log">${escapeHtml(usbLog)}</pre>
@@ -103,15 +102,15 @@ function render(): void {
             <button class="text-button" id="clear-cdc">ログを消去</button>
           </div>
         </div>
-      </section>
+      </details>
 
       <section class="status ${busy ? "working" : ""}" aria-live="polite">
-        <span class="status-light"></span><div><strong>${busy ? "PROCESSING" : "STATUS"}</strong><p>${escapeHtml(status)}</p></div>
+        <span class="status-light"></span><div><p>${escapeHtml(status)}</p></div>
       </section>
     </main>
 
-    <aside class="drawer" id="drawer" aria-hidden="true">
-      <div class="drawer-head"><div><small>ACCOUNT & SETTINGS</small><h2>Menu</h2></div><button class="icon-button" id="close-menu">×</button></div>
+    <aside class="drawer" id="drawer" inert aria-hidden="true">
+      <div class="drawer-head"><div><small>ACCOUNT & SETTINGS</small><h2>Menu</h2></div><button class="icon-button" id="close-menu" aria-label="設定を閉じる">×</button></div>
       <div class="account-card"><span class="avatar">${escapeHtml((viewer || "G").slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(viewer || "Guest")}</strong><small>${token ? "GitHub connected" : "Public API rate limit applies"}</small></div></div>
       <button class="primary full" id="oauth-login" ${busy || !oauthAvailable() ? "disabled" : ""}>GitHubでログイン</button>
       ${!oauthAvailable() ? `<p class="hint">この配信ではOAuth proxyが未設定です。下のtoken入力を利用できます。</p>` : ""}
@@ -128,8 +127,10 @@ function render(): void {
 
 function bindEvents(): void {
   on("menu-button", "click", () => toggleDrawer(true));
+  on("drawer", "keydown", (event) => { if ((event as KeyboardEvent).key === "Escape") toggleDrawer(false); });
   on("close-menu", "click", () => toggleDrawer(false));
   on("scrim", "click", () => toggleDrawer(false));
+  on("choose-local", "click", () => document.getElementById("local-file")?.click());
   on("local-file", "change", localFileChanged);
   on("repo", "input", (event) => {
     repoText = (event.target as HTMLInputElement).value;
@@ -150,6 +151,15 @@ function bindEvents(): void {
   on("trigger-cdc", "click", triggerCdc);
   on("disconnect-cdc", "click", disconnectCdc);
   on("clear-cdc", "click", clearCdc);
+  document.querySelectorAll<HTMLButtonElement>("[data-load-run]").forEach((button) => {
+    button.onclick = () => run("Artifact一覧を取得しています…", async () => {
+      const build = builds.find((item) => item.runId === Number(button.dataset.loadRun));
+      if (!build) return;
+      build.artifacts = await new GitHubClient(token).artifacts(parseRepo(listRepo), build.runId);
+      saveBuilds(listKey, builds);
+      status = build.artifacts.length ? "対象のArtifactを選択してください。" : "有効なArtifactはありません。";
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-artifact]").forEach((button) => button.addEventListener("click", selectArtifact));
   document.querySelectorAll<HTMLButtonElement>("[data-firmware]").forEach((button) => button.addEventListener("click", selectFirmware));
 }
@@ -172,11 +182,13 @@ async function loadBuilds(force: boolean): Promise<void> {
     const key = cacheKey();
     const cached = loadCachedBuilds(key, force);
     if (cached.length && !force) {
+      listKey = key; listRepo = repo.owner + "/" + repo.repo;
       builds = cached;
       status = `キャッシュから${builds.length} buildsを表示しました。`;
       return;
     }
-    builds = (await new GitHubClient(token).builds(repo, branch)).filter((build) => build.artifacts.length);
+    builds = await new GitHubClient(token).builds(repo, branch);
+    listKey = key; listRepo = repo.owner + "/" + repo.repo;
     saveBuilds(key, builds);
     status = `${builds.length} buildsをGitHubから読み込み、キャッシュしました。`;
   });
@@ -186,21 +198,24 @@ async function selectArtifact(event: Event): Promise<void> {
   const button = event.currentTarget as HTMLButtonElement;
   const runId = Number(button.dataset.run);
   const artifactId = Number(button.dataset.artifact);
-  selectedBuild = builds.find((build) => build.runId === runId);
-  selectedArtifact = selectedBuild?.artifacts.find((artifact) => artifact.id === artifactId);
-  if (!selectedBuild || !selectedArtifact) return;
-  const artifact = selectedArtifact;
+  const build = builds.find((build) => build.runId === runId);
+  const artifact = build?.artifacts?.find((artifact) => artifact.id === artifactId);
+  if (!build || !artifact) return;
+
   await run(`${artifact.name}を準備しています…`, async () => {
     let archive = await getArtifact(artifactId);
     let cached = true;
     if (!archive) {
-      archive = await new GitHubClient(token).artifact(parseRepo(repoText), artifactId);
+      archive = await new GitHubClient(token).artifact(parseRepo(listRepo), artifactId);
       await putArtifact(artifactId, archive);
       cached = false;
     }
-    firmwareFiles = await extractFirmware(archive, artifact.name);
-    if (!firmwareFiles.length) throw new Error("Artifact内にUF2、BIN、HEX、ZIPがありません");
-    selectedFirmware = firmwareFiles[0];
+    const files = await extractFirmware(archive, artifact.name);
+    if (!files.length) throw new Error("Artifact内にUF2、BIN、HEX、ZIPがありません");
+    selectedBuild = build;
+    selectedArtifact = artifact;
+    firmwareFiles = files;
+    selectedFirmware = files[0];
     status = `${artifact.name}: ${firmwareFiles.length} files${cached ? "（キャッシュ）" : ""}`;
   });
 }
@@ -339,6 +354,7 @@ function appendUsbLog(text: string): void {
 }
 
 async function run(message: string, action: () => Promise<void>): Promise<void> {
+  if (busy) return;
   busy = true;
   status = message;
   render();
@@ -354,7 +370,8 @@ async function run(message: string, action: () => Promise<void>): Promise<void> 
 
 function restoreCachedBuilds(): void {
   try {
-    builds = loadCachedBuilds(cacheKey(), true);
+    listKey = cacheKey(); listRepo = repoText;
+    builds = loadCachedBuilds(listKey, true);
     if (builds.length) {
       status = `前回の${builds.length} buildsをキャッシュから復元しました。`;
       render();
@@ -372,7 +389,7 @@ function cacheKey(): string {
 function buildCard(build: Build): string {
   return `<article class="build-card">
     <div class="build-meta"><div><strong>${escapeHtml(build.title)}</strong><span>${escapeHtml(build.branch)} · ${escapeHtml(build.sha.slice(0, 7))}</span></div><time>${formatDate(build.createdAt)}</time></div>
-    <div class="artifacts">${build.artifacts.map((artifact) => `<button data-run="${build.runId}" data-artifact="${artifact.id}" class="artifact ${selectedArtifact?.id === artifact.id ? "selected" : ""}"><span><strong>${escapeHtml(artifact.name)}</strong><small>${formatBytes(artifact.size)}</small></span><b>→</b></button>`).join("")}</div>
+    <div class="artifacts">${!build.artifacts ? `<button class="secondary" data-load-run="${build.runId}" ${busy ? "disabled" : ""}>Artifactを表示</button>` : !build.artifacts.length ? "有効なArtifactはありません" : build.artifacts.map((artifact) => `<button ${busy ? "disabled" : ""} data-run="${build.runId}" data-artifact="${artifact.id}" class="artifact ${selectedArtifact?.id === artifact.id ? "selected" : ""}"><span><strong>${escapeHtml(artifact.name)}</strong><small>${formatBytes(artifact.size)}</small></span><b>→</b></button>`).join("")}</div>
   </article>`;
 }
 
@@ -404,9 +421,13 @@ function download(firmware: Firmware): void {
 }
 
 function toggleDrawer(open: boolean): void {
+  document.querySelector("#drawer")?.toggleAttribute("inert", !open);
+  document.querySelectorAll("main, .topbar").forEach((element) => element.toggleAttribute("inert", open));
+  document.querySelector("#menu-button")?.setAttribute("aria-expanded", String(open));
   document.querySelector("#drawer")?.classList.toggle("open", open);
   document.querySelector("#scrim")?.classList.toggle("open", open);
   document.querySelector("#drawer")?.setAttribute("aria-hidden", String(!open));
+  document.querySelector<HTMLElement>(open ? "#close-menu" : "#menu-button")?.focus();
 }
 
 function formatDate(value: string): string {

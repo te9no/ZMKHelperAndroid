@@ -55,27 +55,20 @@ export class GitHubClient {
     const runs = await this.get<WorkflowRunResponse>(
       `/repos/${repo.owner}/${repo.repo}/actions/runs?status=success&per_page=30${branchQuery}`,
     );
-    return Promise.all(
-      runs.workflow_runs.map(async (run) => {
-        const response = await this.get<ArtifactsResponse>(
-          `/repos/${repo.owner}/${repo.repo}/actions/runs/${run.id}/artifacts?per_page=100`,
-        );
-        const artifacts: Artifact[] = response.artifacts
-          .filter((artifact) => !artifact.expired)
-          .map((artifact) => ({ id: artifact.id, name: artifact.name, size: artifact.size_in_bytes }));
-        return {
-          runId: run.id,
-          title: run.display_title || run.name || `Run ${run.id}`,
-          branch: run.head_branch || "unknown",
-          sha: run.head_sha || "",
-          createdAt: run.created_at || "",
-          htmlUrl: run.html_url || "",
-          artifacts,
-        };
-      }),
-    );
+    return runs.workflow_runs.map((run) => ({
+      runId: run.id, title: run.display_title || run.name || `Run ${run.id}`,
+      branch: run.head_branch || "unknown", sha: run.head_sha || "",
+      createdAt: run.created_at || "", htmlUrl: run.html_url || "",
+    }));
   }
 
+  async artifacts(repo: RepoRef, runId: number): Promise<Artifact[]> {
+    const response = await this.get<ArtifactsResponse>(
+      `/repos/${repo.owner}/${repo.repo}/actions/runs/${runId}/artifacts?per_page=100`,
+    );
+    return response.artifacts.filter((a) => !a.expired)
+      .map((a) => ({ id: a.id, name: a.name, size: a.size_in_bytes }));
+  }
   async artifact(repo: RepoRef, artifactId: number): Promise<Blob> {
     if (!this.token) throw new Error("Artifactの取得にはGitHubログインまたはtokenが必要です");
     const response = await fetch(`${API}/repos/${repo.owner}/${repo.repo}/actions/artifacts/${artifactId}/zip`, {

@@ -16,7 +16,7 @@ export interface Build {
   sha: string;
   createdAt: string;
   htmlUrl: string;
-  artifacts: Artifact[];
+  artifacts?: Artifact[];
 }
 
 export interface Firmware {
