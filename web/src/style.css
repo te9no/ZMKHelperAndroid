@@ -197,3 +197,32 @@ main { max-width:1180px; padding-top:clamp(20px,4vw,46px); }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none!important; animation:none!important; } }
 .file-drop { width: 100%; color: inherit; }
+
+.source-actions { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; }
+.source-actions .secondary { border-color:#7b978a; }
+.field select { text-overflow:ellipsis; }
+.workspace-title p { margin-bottom:0; }
+.selected-firmware small { font-size:12px; letter-spacing:normal; }
+.firmware-row[aria-pressed="true"]::before { content:"✓"; color:var(--green); font-weight:bold; }
+.firmware-row span { flex:1; }
+
+/* Carry the workbench header's ink and numbered steps into the two decision points. */
+.source-panel .step-heading {
+  align-items:center;
+  gap:14px;
+  padding-block:3px;
+}
+.source-panel .step-heading > span {
+  font-size:clamp(40px,5vw,56px);
+  line-height:1;
+  border-radius:0;
+  padding-inline-end:14px;
+  border-inline-end:3px solid var(--green);
+  font-variant-numeric:lining-nums;
+}
+.source-panel .step-heading h2 { font-size:clamp(20px,2.3vw,26px); line-height:1.25; }
+#load-builds { display:flex; align-items:center; justify-content:space-between; gap:12px; text-align:start; }
+#load-builds::after { content:""; width:9px; height:9px; border-block-start:2px solid; border-inline-end:2px solid; transform:rotate(45deg); margin-inline-end:3px; }
+.selected-firmware { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.selected-firmware strong { font-size:clamp(17px,2vw,22px); line-height:1.35; }
+.selected-firmware small,.selected-firmware div > span,.selected-firmware i { color:var(--paper); }

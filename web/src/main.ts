@@ -44,7 +44,7 @@ function render(): void {
     <header class="topbar">
       <button class="icon-button" id="menu-button" aria-controls="drawer" aria-expanded="false" aria-label="設定を開く">☰</button>
       <div class="brand"><img class="app-mark" src="./icons/icon-192.png" alt="" width="40" height="40"><div><strong>ZMK Firmware Helper</strong></div></div>
-      <span class="connection ${token ? "online" : ""}">${token ? `GitHub: ${escapeHtml(viewer || "signed in")}` : "Guest mode"}</span>
+      <span class="connection ${token ? "online" : ""}">${token ? `GitHub: ${escapeHtml(viewer || "signed in")}` : "未ログイン"}</span>
     </header>
 
     <main>
@@ -53,17 +53,17 @@ function render(): void {
       <div class="step-grid">
         <section class="panel source-panel">
           <div class="step-heading"><span>01</span><div><h2>GitHubからビルドを選択</h2><p>リポジトリを入力し、必要ならブランチで絞り込んでください。</p></div></div>
-          <label class="field"><span>Repository</span><input id="repo" value="${escapeHtml(repoText)}" placeholder="owner/repository" autocomplete="off" /></label>
+          <label class="field"><span>リポジトリ</span><input id="repo" value="${escapeHtml(repoText)}" placeholder="owner/repository" autocomplete="off" /></label>
           <div class="source-actions">
-            <label class="field grow"><span>Branch</span>
+            <label class="field grow"><span>ブランチ</span>
               <select id="branch" ${branches.length ? "" : "disabled"}>
-                <option value="">All branches</option>
+                <option value="">すべてのブランチ</option>
                 ${branches.map((item) => `<option ${item === branch ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
               </select>
             </label>
-            <button class="secondary align-bottom" id="load-branches" ${busy ? "disabled" : ""}>Branches</button>
+            <button class="secondary align-bottom" id="load-branches" ${busy ? "disabled" : ""}>一覧を取得</button>
           </div>
-          <button class="primary full" id="load-builds" ${busy ? "disabled" : ""}>成功したActionsビルドを読み込む</button>
+          <button class="primary full" id="load-builds" ${busy ? "disabled" : ""}>成功したビルドを読み込む</button>
           <div class="divider"><span>またはログインせずに</span></div>
           <button type="button" class="file-drop" id="choose-local" ${busy ? "disabled" : ""}>
             <span class="drop-icon">＋</span><strong>端末からUF2 / ZIPを選択</strong><small>最大64 MiB・処理は端末内で完結</small>
@@ -72,7 +72,7 @@ function render(): void {
         </section>
 
         <section class="panel builds-panel">
-          <div class="step-heading"><span>02</span><div><h2>BuildとArtifact</h2><p>${builds.length ? `${builds.length} builds loaded` : "ビルド単位でArtifactを表示します。"}</p></div></div>
+          <div class="step-heading"><span>02</span><div><h2>ビルドと成果物</h2><p>${builds.length ? `ビルド ${builds.length} 件` : "ビルド単位でArtifactを表示します。"}</p></div></div>
           <div class="build-list">
             ${builds.length ? builds.map(buildCard).join("") : emptyState("GitHubからビルドを読み込むと、ここに一覧が表示されます。")}
           </div>
@@ -389,16 +389,16 @@ function cacheKey(): string {
 function buildCard(build: Build): string {
   return `<article class="build-card">
     <div class="build-meta"><div><strong>${escapeHtml(build.title)}</strong><span>${escapeHtml(build.branch)} · ${escapeHtml(build.sha.slice(0, 7))}</span></div><time>${formatDate(build.createdAt)}</time></div>
-    <div class="artifacts">${!build.artifacts ? `<button class="secondary" data-load-run="${build.runId}" ${busy ? "disabled" : ""}>Artifactを表示</button>` : !build.artifacts.length ? "有効なArtifactはありません" : build.artifacts.map((artifact) => `<button ${busy ? "disabled" : ""} data-run="${build.runId}" data-artifact="${artifact.id}" class="artifact ${selectedArtifact?.id === artifact.id ? "selected" : ""}"><span><strong>${escapeHtml(artifact.name)}</strong><small>${formatBytes(artifact.size)}</small></span><b>→</b></button>`).join("")}</div>
+    <div class="artifacts">${!build.artifacts ? `<button class="secondary" data-load-run="${build.runId}" ${busy ? "disabled" : ""}>Artifactを表示</button>` : !build.artifacts.length ? "有効なArtifactはありません" : build.artifacts.map((artifact) => `<button ${busy ? "disabled" : ""} data-run="${build.runId}" aria-pressed="${selectedArtifact?.id === artifact.id}" data-artifact="${artifact.id}" class="artifact ${selectedArtifact?.id === artifact.id ? "selected" : ""}"><span><strong>${escapeHtml(artifact.name)}</strong><small>${formatBytes(artifact.size)}</small></span><b aria-hidden="true">${selectedArtifact?.id === artifact.id ? "✓" : "→"}</b></button>`).join("")}</div>
   </article>`;
 }
 
 function firmwareCard(firmware: Firmware): string {
-  return `<article class="selected-firmware"><span class="file-type">${escapeHtml(extension(firmware.name))}</span><div><small>SELECTED FIRMWARE</small><strong>${escapeHtml(firmware.name)}</strong><span>${escapeHtml(firmware.source)} · ${formatBytes(firmware.blob.size)}</span></div><i>✓</i></article>`;
+  return `<article class="selected-firmware"><span class="file-type">${escapeHtml(extension(firmware.name))}</span><div><small>選択中のファームウェア</small><strong>${escapeHtml(firmware.name)}</strong><span>${escapeHtml(firmware.source)} · ${formatBytes(firmware.blob.size)}</span></div><i>✓</i></article>`;
 }
 
 function firmwareRow(firmware: Firmware, index: number): string {
-  return `<button class="firmware-row ${firmware === selectedFirmware ? "selected" : ""}" data-firmware="${index}"><span>${escapeHtml(firmware.name)}</span><small>${formatBytes(firmware.blob.size)}</small></button>`;
+  return `<button class="firmware-row ${firmware === selectedFirmware ? "selected" : ""}" aria-pressed="${firmware === selectedFirmware}" data-firmware="${index}"><span>${escapeHtml(firmware.name)}</span><small>${formatBytes(firmware.blob.size)}</small></button>`;
 }
 
 function emptyState(text: string): string {
