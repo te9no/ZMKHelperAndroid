@@ -19,3 +19,11 @@ local.properties
 # OS files
 .DS_Store
 Thumbs.db
+
+# Web build outputs and local configuration
+web/node_modules/
+web/dist/
+web/.env
+web/.env.local
+web/worker/.dev.vars
+web/*.tsbuildinfo

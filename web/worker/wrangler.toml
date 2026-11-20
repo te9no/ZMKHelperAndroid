@@ -1,0 +1,7 @@
+name = "zmk-helper-oauth"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://te9no.github.io"
+GITHUB_CLIENT_ID = "Ov23li28WjgBpOYKKb9Y"
