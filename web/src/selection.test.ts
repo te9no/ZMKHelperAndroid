@@ -13,7 +13,8 @@ vi.mock("./firmware", () => ({ extractFirmware: vi.fn(), packageBlueboot: vi.fn(
 it("preserves the selected artifact and downloadable UF2 after a failed switch", async () => {
   document.body.innerHTML = '<div id="app"></div>';
   localStorage.setItem("repo", "demo/keyboard");
-  const blob = new Blob(["left firmware"]);
+  const bytes = new Uint8Array([0x55, 0x46, 0x32, 0x00, 0xff]);
+  const blob = new Blob([bytes], { type: "text/plain" });
   vi.mocked(getArtifact).mockResolvedValueOnce(blob).mockRejectedValueOnce(new Error("offline"));
   vi.mocked(extractFirmware).mockResolvedValue([{ name: "left.uf2", path: "left.uf2", blob, source: "Left" }]);
   await import("./main");
@@ -24,9 +25,16 @@ it("preserves the selected artifact and downloadable UF2 after a failed switch",
   await vi.waitFor(() => expect(document.querySelector(".status")?.textContent).toContain("offline"));
   expect(document.querySelector(".artifact.selected")?.getAttribute("data-artifact")).toBe("1");
   const url = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  let downloadName = "";
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    downloadName = this.download;
+  });
   click("#save");
-  expect(url).toHaveBeenCalledWith(blob);
+  const file = url.mock.calls[0]?.[0] as File;
+  expect(downloadName).toBe("left.uf2");
+  expect(file.name).toBe(downloadName);
+  expect(file.type).toBe("application/octet-stream");
+  expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
 });
 
 it("opens settings with focus inside and returns focus on Escape", async () => {

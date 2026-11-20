@@ -412,11 +412,15 @@ function saveButtonLabel(): string {
 }
 
 function download(firmware: Firmware): void {
-  const url = URL.createObjectURL(firmware.blob);
+  const type = firmware.name.toLowerCase().endsWith(".zip") ? "application/zip" : "application/octet-stream";
+  const file = new File([firmware.blob], firmware.name, { type });
+  const url = URL.createObjectURL(file);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = firmware.name;
+  document.body.append(anchor);
   anchor.click();
+  anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
